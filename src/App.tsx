@@ -33,7 +33,7 @@ export function App() {
           <CalendarDays aria-hidden />
           <h1>Турнир пока не загрузился</h1>
           <p>{tournament.error ?? "Попробуйте обновить страницу."}</p>
-          <button type="button" onClick={tournament.refresh}>
+          <button type="button" onClick={() => tournament.refresh()}>
             Обновить
           </button>
         </section>
@@ -45,12 +45,16 @@ export function App() {
     <Layout route={route}>
       {route.name === "home" && <HomePage state={tournament.state} />}
       {route.name === "predict" && (
-        <PredictPage state={tournament.state} onSaved={tournament.refresh} mode="new" />
+        <PredictPage
+          state={tournament.state}
+          onSaved={() => tournament.refresh({ silent: true })}
+          mode="new"
+        />
       )}
       {route.name === "edit" && (
         <PredictPage
           state={tournament.state}
-          onSaved={tournament.refresh}
+          onSaved={() => tournament.refresh({ silent: true })}
           mode="edit"
           editToken={route.token}
         />
