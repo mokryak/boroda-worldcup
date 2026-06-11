@@ -190,20 +190,21 @@ function MatchPredictionsDialog({
       <section className="match-dialog" role="dialog" aria-modal="true" aria-labelledby="match-dialog-title">
         <div className="match-dialog-header">
           <div>
-            <p className="eyebrow">{formatDateTime(match.kickoffUtc)}</p>
             <h2 id="match-dialog-title">
               {match.home} - {match.away}
             </h2>
-            <p>{match.groupOrRound}</p>
+            <p>{formatDateTime(match.kickoffUtc)}</p>
           </div>
           <button className="icon-button close-dialog" type="button" onClick={onClose} title="Закрыть">
             <X size={20} aria-hidden />
           </button>
         </div>
 
-        <div className="match-dialog-score">
-          <span>Фактический счет</span>
-          <strong>{actualScore(match) ? `${match.actualHome}:${match.actualAway}` : "—"}</strong>
+        <div className="match-dialog-meta">
+          <span>{match.groupOrRound}</span>
+          <span>
+            Счет: <strong>{actualScore(match) ? `${match.actualHome}:${match.actualAway}` : "—"}</strong>
+          </span>
         </div>
 
         {!visible && (
@@ -213,6 +214,11 @@ function MatchPredictionsDialog({
         )}
 
         <div className="dialog-predictions">
+          <div className="dialog-prediction-head" aria-hidden>
+            <span>Участник</span>
+            <span>{visible ? "Прогноз" : "Статус"}</span>
+            {visible && <span>Очки</span>}
+          </div>
           {participants.map((participant) => {
             const prediction = predictionMap.get(`${participant.id}:${match.id}`);
             const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
@@ -223,12 +229,15 @@ function MatchPredictionsDialog({
                 <span>{participant.displayName}</span>
                 {visible ? (
                   prediction ? (
-                    <strong>
-                      {prediction.predHome}:{prediction.predAway}
-                      <span>{points}</span>
-                    </strong>
+                    <>
+                      <strong>{prediction.predHome}:{prediction.predAway}</strong>
+                      <strong className="dialog-points">{points}</strong>
+                    </>
                   ) : (
-                    <em>нет прогноза</em>
+                    <>
+                      <em>—</em>
+                      <em>—</em>
+                    </>
                   )
                 ) : (
                   <em className={submitted ? "submitted-mark yes" : "submitted-mark"}>
