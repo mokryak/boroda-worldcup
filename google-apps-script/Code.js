@@ -117,6 +117,20 @@ function refreshLiveScoresCron() {
   }
 }
 
+function authorizeApiFootball() {
+  const token = PropertiesService.getScriptProperties().getProperty("API_FOOTBALL_KEY");
+  if (!token) {
+    throw appError_("unknown", "API_FOOTBALL_KEY is missing in Script Properties");
+  }
+  UrlFetchApp.fetch(API_FOOTBALL_LIVESCORES_URL, {
+    muteHttpExceptions: true,
+    headers: {
+      Accept: "application/json",
+      "x-apisports-key": token
+    }
+  });
+}
+
 function getPublicState_(editToken) {
   const settings = getSettings_();
   const stages = rowsAsObjects_(SHEETS.stages).map((row) => ({
@@ -309,9 +323,13 @@ function refreshLiveScores_(matches) {
   if (cached) {
     providerFixtures = JSON.parse(cached);
   } else {
-    providerFixtures = apiFootballToken
-      ? fetchApiFootballLivescores_(apiFootballToken)
-      : fetchSportmonksLivescores_(sportmonksToken);
+    try {
+      providerFixtures = apiFootballToken
+        ? fetchApiFootballLivescores_(apiFootballToken)
+        : fetchSportmonksLivescores_(sportmonksToken);
+    } catch (error) {
+      return { items: [], finalizedMatchIds: [] };
+    }
     cache.put(`${provider}_live_scores`, JSON.stringify(providerFixtures), LIVE_SCORE_CACHE_SECONDS);
   }
 
