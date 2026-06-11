@@ -10,8 +10,10 @@ const PREDICTION_LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
 const LIVE_SCORE_WINDOW_BEFORE_MS = 15 * 60 * 1000;
 const LIVE_SCORE_WINDOW_AFTER_MS = 4 * 60 * 60 * 1000;
 const LIVE_SCORE_CACHE_SECONDS = 45;
+const API_FOOTBALL_LIVESCORES_URL = "https://v3.football.api-sports.io/fixtures?live=all";
 const SPORTMONKS_LIVESCORES_URL = "https://api.sportmonks.com/v3/football/livescores";
 const SPORTMONKS_FINAL_STATE_IDS = new Set([5, 8]);
+const API_FOOTBALL_FINAL_STATUSES = new Set(["FT", "AET", "PEN"]);
 
 const TEAM_ALIASES = {
   "bosnia and herzegovina": "bosnia herzegovina",
@@ -293,35 +295,46 @@ function refreshLiveScores_(matches) {
     return { items: [], finalizedMatchIds: [] };
   }
 
-  const token = PropertiesService.getScriptProperties().getProperty("SPORTMONKS_API_TOKEN");
-  if (!token) {
+  const properties = PropertiesService.getScriptProperties();
+  const apiFootballToken = properties.getProperty("API_FOOTBALL_KEY");
+  const sportmonksToken = properties.getProperty("SPORTMONKS_API_TOKEN");
+  if (!apiFootballToken && !sportmonksToken) {
     return { items: [], finalizedMatchIds: [] };
   }
 
   const cache = CacheService.getScriptCache();
-  const cached = cache.get("sportmonks_live_scores");
+  const provider = apiFootballToken ? "api-football" : "sportmonks";
+  const cached = cache.get(`${provider}_live_scores`);
   let providerFixtures;
   if (cached) {
     providerFixtures = JSON.parse(cached);
   } else {
-    providerFixtures = fetchSportmonksLivescores_(token);
-    cache.put("sportmonks_live_scores", JSON.stringify(providerFixtures), LIVE_SCORE_CACHE_SECONDS);
+    providerFixtures = apiFootballToken
+      ? fetchApiFootballLivescores_(apiFootballToken)
+      : fetchSportmonksLivescores_(sportmonksToken);
+    cache.put(`${provider}_live_scores`, JSON.stringify(providerFixtures), LIVE_SCORE_CACHE_SECONDS);
   }
 
   const liveItems = [];
   const finalized = [];
   candidates.forEach((match) => {
-    const fixture = findProviderFixture_(match, providerFixtures);
+    const fixture =
+      provider === "api-football"
+        ? findApiFootballFixture_(match, providerFixtures)
+        : findSportmonksFixture_(match, providerFixtures);
     if (!fixture) {
       return;
     }
 
-    const score = extractSportmonksScore_(fixture, match);
+    const score =
+      provider === "api-football"
+        ? extractApiFootballScore_(fixture)
+        : extractSportmonksScore_(fixture, match);
     if (!score) {
       return;
     }
 
-    const status = sportmonksStatus_(fixture);
+    const status = provider === "api-football" ? apiFootballStatus_(fixture) : sportmonksStatus_(fixture);
     liveItems.push({
       matchId: match.id,
       home: score.home,
@@ -329,7 +342,7 @@ function refreshLiveScores_(matches) {
       status: status.status,
       minute: status.minute,
       updatedAt: new Date().toISOString(),
-      provider: "sportmonks"
+      provider
     });
 
     if (status.status === "complete") {
@@ -359,6 +372,58 @@ function getLiveScoreCandidates_(matches, now) {
   });
 }
 
+function fetchApiFootballLivescores_(token) {
+  const response = UrlFetchApp.fetch(API_FOOTBALL_LIVESCORES_URL, {
+    muteHttpExceptions: true,
+    headers: {
+      Accept: "application/json",
+      "x-apisports-key": token
+    }
+  });
+
+  const statusCode = response.getResponseCode();
+  if (statusCode < 200 || statusCode >= 300) {
+    return [];
+  }
+
+  const payload = JSON.parse(response.getContentText());
+  return Array.isArray(payload.response) ? payload.response : [];
+}
+
+function findApiFootballFixture_(match, fixtures) {
+  const expectedHome = canonicalTeam_(match.home);
+  const expectedAway = canonicalTeam_(match.away);
+
+  return fixtures.find((fixture) => {
+    const home = canonicalTeam_(fixture.teams && fixture.teams.home && fixture.teams.home.name);
+    const away = canonicalTeam_(fixture.teams && fixture.teams.away && fixture.teams.away.name);
+    return home === expectedHome && away === expectedAway;
+  });
+}
+
+function extractApiFootballScore_(fixture) {
+  const goals = fixture.goals || {};
+  if (typeof goals.home === "number" && typeof goals.away === "number") {
+    return { home: goals.home, away: goals.away };
+  }
+
+  const fulltime = fixture.score && fixture.score.fulltime;
+  if (fulltime && typeof fulltime.home === "number" && typeof fulltime.away === "number") {
+    return { home: fulltime.home, away: fulltime.away };
+  }
+
+  return null;
+}
+
+function apiFootballStatus_(fixture) {
+  const status = (fixture.fixture && fixture.fixture.status) || {};
+  const short = String(status.short || "").toUpperCase();
+  return {
+    status: API_FOOTBALL_FINAL_STATUSES.has(short) ? "complete" : "live",
+    minute: typeof status.elapsed === "number" ? status.elapsed : null
+  };
+}
+
 function fetchSportmonksLivescores_(token) {
   const url =
     SPORTMONKS_LIVESCORES_URL +
@@ -385,7 +450,7 @@ function fetchSportmonksLivescores_(token) {
   return payload.data ? [payload.data] : [];
 }
 
-function findProviderFixture_(match, fixtures) {
+function findSportmonksFixture_(match, fixtures) {
   const expectedHome = canonicalTeam_(match.home);
   const expectedAway = canonicalTeam_(match.away);
 

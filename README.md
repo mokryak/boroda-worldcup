@@ -34,15 +34,15 @@ VITE_APPS_SCRIPT_URL=https://script.google.com/macros/s/.../exec
 
 ### Live-счет
 
-Live-счет подключен через SportMonks Football API. Токен нельзя класть во фронтенд или git:
+Live-счет подключен через API-Football free plan. Токен нельзя класть во фронтенд или git:
 
-1. Получите API token в SportMonks.
+1. Создайте аккаунт на API-Football и подключите Free plan.
 2. В Apps Script откройте `Project Settings -> Script Properties`.
-3. Добавьте свойство `SPORTMONKS_API_TOKEN` со значением токена.
+3. Добавьте свойство `API_FOOTBALL_KEY` со значением API key.
 4. Сохраните `Code.js` и сделайте `Deploy -> Manage deployments -> Edit -> New version -> Deploy`.
 5. Запустите `installLiveScoreTrigger` один раз, если хотите, чтобы итоговый счет записывался даже когда сайт никто не открыл.
 
-Apps Script дергает SportMonks только если есть матч в live-окне: от 15 минут до старта и до 4 часов после старта, при этом в `Matches` еще нет финального счета. Ответ кэшируется примерно на 45 секунд. Когда API возвращает завершенный матч, Apps Script записывает итог в `Matches.actual_home`, `Matches.actual_away` и `Matches.status = complete`; после этого матч больше не запрашивается у внешнего API.
+Apps Script дергает API-Football только если есть матч в live-окне: от 15 минут до старта и до 4 часов после старта, при этом в `Matches` еще нет финального счета. Ответ кэшируется примерно на 45 секунд. Когда API возвращает завершенный матч, Apps Script записывает итог в `Matches.actual_home`, `Matches.actual_away` и `Matches.status = complete`; после этого матч больше не запрашивается у внешнего API. Free plan дает 100 requests/day, поэтому не запускайте trigger чаще 1 раза в минуту.
 
 Если сайт публикуется как GitHub Pages project site, например `https://user.github.io/worldcup/`, добавьте:
 
