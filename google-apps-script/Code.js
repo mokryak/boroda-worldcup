@@ -159,7 +159,19 @@ function getLiveScoreDebug_() {
     return debug;
   }
 
-  const result = fetchApiFootballLivescoresWithMeta_(token);
+  let result;
+  try {
+    result = fetchApiFootballLivescoresWithMeta_(token);
+  } catch (error) {
+    debug.apiFootball = {
+      statusCode: null,
+      results: null,
+      errors: null,
+      message: error.message || String(error)
+    };
+    return debug;
+  }
+
   debug.apiFootball = {
     statusCode: result.statusCode,
     results: result.results,
