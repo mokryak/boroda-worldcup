@@ -42,6 +42,9 @@ function doGet(event) {
     if (action === "state") {
       return jsonOk(getPublicState_(event.parameter.editToken));
     }
+    if (action === "liveDebug") {
+      return jsonOk(getLiveScoreDebug_());
+    }
     return jsonError_("not_found", "Unknown action", 404);
   } catch (error) {
     return jsonError_(error.code || "unknown", error.message || "Unknown error", error.status || 400);
@@ -129,6 +132,56 @@ function authorizeApiFootball() {
       "x-apisports-key": token
     }
   });
+}
+
+function getLiveScoreDebug_() {
+  const matches = readMatches_();
+  const candidates = getLiveScoreCandidates_(matches, new Date());
+  const properties = PropertiesService.getScriptProperties();
+  const token = properties.getProperty("API_FOOTBALL_KEY");
+  const debug = {
+    now: new Date().toISOString(),
+    tokenPresent: Boolean(token),
+    candidates: candidates.map((match) => ({
+      id: match.id,
+      kickoffUtc: match.kickoffUtc,
+      home: match.home,
+      away: match.away,
+      status: match.status,
+      actualHome: match.actualHome,
+      actualAway: match.actualAway
+    })),
+    apiFootball: null,
+    matches: []
+  };
+
+  if (!token || !candidates.length) {
+    return debug;
+  }
+
+  const result = fetchApiFootballLivescoresWithMeta_(token);
+  debug.apiFootball = {
+    statusCode: result.statusCode,
+    results: result.results,
+    errors: result.errors,
+    message: result.message
+  };
+  debug.matches = result.fixtures.slice(0, 20).map((fixture) => {
+    const home = fixture.teams && fixture.teams.home && fixture.teams.home.name;
+    const away = fixture.teams && fixture.teams.away && fixture.teams.away.name;
+    const score = extractApiFootballScore_(fixture);
+    const status = apiFootballStatus_(fixture);
+    const localMatch = candidates.find((candidate) => findApiFootballFixture_(candidate, [fixture]));
+    return {
+      apiHome: home,
+      apiAway: away,
+      score,
+      status,
+      matchedMatchId: localMatch ? localMatch.id : null
+    };
+  });
+
+  return debug;
 }
 
 function getPublicState_(editToken) {
@@ -391,6 +444,10 @@ function getLiveScoreCandidates_(matches, now) {
 }
 
 function fetchApiFootballLivescores_(token) {
+  return fetchApiFootballLivescoresWithMeta_(token).fixtures;
+}
+
+function fetchApiFootballLivescoresWithMeta_(token) {
   const response = UrlFetchApp.fetch(API_FOOTBALL_LIVESCORES_URL, {
     muteHttpExceptions: true,
     headers: {
@@ -400,12 +457,14 @@ function fetchApiFootballLivescores_(token) {
   });
 
   const statusCode = response.getResponseCode();
-  if (statusCode < 200 || statusCode >= 300) {
-    return [];
-  }
-
   const payload = JSON.parse(response.getContentText());
-  return Array.isArray(payload.response) ? payload.response : [];
+  return {
+    statusCode,
+    results: payload.results,
+    errors: payload.errors,
+    message: payload.message,
+    fixtures: statusCode >= 200 && statusCode < 300 && Array.isArray(payload.response) ? payload.response : []
+  };
 }
 
 function findApiFootballFixture_(match, fixtures) {
