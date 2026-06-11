@@ -1,5 +1,5 @@
 import { demoState } from "../data/seed";
-import { canEditStage } from "../domain/visibility";
+import { canEditMatch, isPredictionVisible } from "../domain/visibility";
 import type {
   ApiErrorCode,
   PublicState,
@@ -10,7 +10,7 @@ import type {
 import { ApiError } from "../domain/types";
 
 export type ApiClient = {
-  getState(): Promise<PublicState>;
+  getState(editToken?: string): Promise<PublicState>;
   register(displayName: string): Promise<RegisterResponse>;
   savePredictions(editToken: string, stageId: StageId, predictions: SavePredictionInput[]): Promise<void>;
 };
@@ -21,8 +21,12 @@ export const apiClient: ApiClient = appsScriptUrl ? createAppsScriptClient(appsS
 
 function createAppsScriptClient(url: string): ApiClient {
   return {
-    async getState() {
-      const response = await fetch(`${url}?action=state`);
+    async getState(editToken) {
+      const params = new URLSearchParams({ action: "state" });
+      if (editToken) {
+        params.set("editToken", editToken);
+      }
+      const response = await fetch(`${url}?${params.toString()}`);
       return readJson(response);
     },
     async register(displayName) {
@@ -60,8 +64,8 @@ function createMockClient(): ApiClient {
   const db = loadMockDb();
 
   return {
-    async getState() {
-      return publicState(db);
+    async getState(editToken) {
+      return publicState(db, editToken);
     },
     async register(displayName) {
       const cleanName = displayName.trim();
@@ -98,20 +102,25 @@ function createMockClient(): ApiClient {
       if (!stage) {
         throw new ApiError("not_found", "Этап не найден.");
       }
-      if (!canEditStage(stage)) {
-        throw new ApiError("deadline_passed", "Дедлайн этапа уже прошел.");
+      const stageMatches = db.matches.filter((match) => match.stageId === stageId);
+      const stageMatchMap = new Map(stageMatches.map((match) => [match.id, match]));
+      if (!predictions.length) {
+        throw new ApiError("incomplete_stage", "Заполните хотя бы один открытый матч.");
       }
-
-      const matchIds = db.matches.filter((match) => match.stageId === stageId).map((match) => match.id);
-      const predictionIds = new Set(predictions.map((prediction) => prediction.matchId));
-      const complete = matchIds.every((matchId) => predictionIds.has(matchId));
-      if (!complete) {
-        throw new ApiError("incomplete_stage", "Нужно заполнить все матчи этапа.");
-      }
+      predictions.forEach((prediction) => {
+        const match = stageMatchMap.get(prediction.matchId);
+        if (!match) {
+          throw new ApiError("not_found", "Матч не найден.");
+        }
+        if (!canEditMatch(match, new Date(), stageMatches)) {
+          throw new ApiError("deadline_passed", "Прогноз на этот матч уже закрыт.");
+        }
+      });
 
       const now = new Date().toISOString();
+      const submittedMatchIds = new Set(predictions.map((prediction) => prediction.matchId));
       db.predictions = db.predictions.filter(
-        (prediction) => prediction.participantId !== participantId || !matchIds.includes(prediction.matchId)
+        (prediction) => prediction.participantId !== participantId || !submittedMatchIds.has(prediction.matchId)
       );
       db.predictions.push(
         ...predictions.map((prediction) => ({
@@ -139,29 +148,87 @@ function createMockClient(): ApiClient {
 function loadMockDb(): MockDb {
   const raw = localStorage.getItem("worldcup-predictor-db");
   if (raw) {
-    return JSON.parse(raw);
+    return migrateMockDb(JSON.parse(raw));
   }
 
-  return {
+  return migrateMockDb({
     ...structuredClone(demoState),
     tokens: {}
-  };
+  });
 }
 
 function persistMockDb(db: MockDb) {
   localStorage.setItem("worldcup-predictor-db", JSON.stringify(db));
 }
 
-function publicState(db: MockDb): PublicState {
+function publicState(db: MockDb, editToken?: string): PublicState {
+  const viewerParticipantId = editToken ? db.tokens[editToken] : undefined;
+  if (editToken && !viewerParticipantId) {
+    throw new ApiError("invalid_token", "Секретная ссылка не найдена.");
+  }
+
+  const visibleMatchIdSet = new Set(
+    db.matches.filter((match) => isPredictionVisible(match, new Date(), db.matches)).map((match) => match.id)
+  );
+
   return {
     tournamentName: db.tournamentName,
     generatedAt: new Date().toISOString(),
     stages: db.stages,
     matches: db.matches,
     participants: db.participants,
-    predictions: db.predictions,
-    submittedStages: db.submittedStages
+    predictions: db.predictions.filter(
+      (prediction) =>
+        visibleMatchIdSet.has(prediction.matchId) || prediction.participantId === viewerParticipantId
+    ),
+    submittedStages: buildSubmittedStages(db),
+    submittedMatches: buildSubmittedMatches(db),
+    viewerParticipantId
   };
+}
+
+function migrateMockDb(db: MockDb): MockDb {
+  return {
+    ...db,
+    submittedStages: db.submittedStages ?? [],
+    submittedMatches: db.submittedMatches ?? [],
+    tokens: db.tokens ?? {}
+  };
+}
+
+function buildSubmittedStages(db: Pick<PublicState, "matches" | "predictions">) {
+  const matchStageMap = new Map(db.matches.map((match) => [match.id, match.stageId]));
+  const submitted = new Map<StageId, Set<string>>();
+
+  db.predictions.forEach((prediction) => {
+    const stageId = matchStageMap.get(prediction.matchId);
+    if (!stageId) {
+      return;
+    }
+    const participantIds = submitted.get(stageId) ?? new Set<string>();
+    participantIds.add(prediction.participantId);
+    submitted.set(stageId, participantIds);
+  });
+
+  return Array.from(submitted.entries()).map(([stageId, participantIds]) => ({
+    stageId,
+    participantIds: Array.from(participantIds)
+  }));
+}
+
+function buildSubmittedMatches(db: Pick<PublicState, "predictions">) {
+  const submitted = new Map<string, Set<string>>();
+
+  db.predictions.forEach((prediction) => {
+    const participantIds = submitted.get(prediction.matchId) ?? new Set<string>();
+    participantIds.add(prediction.participantId);
+    submitted.set(prediction.matchId, participantIds);
+  });
+
+  return Array.from(submitted.entries()).map(([matchId, participantIds]) => ({
+    matchId,
+    participantIds: Array.from(participantIds)
+  }));
 }
 
 export function messageForApiError(error: unknown): string {
@@ -174,8 +241,8 @@ export function messageForApiError(error: unknown): string {
 const apiErrorMessages: Record<ApiErrorCode, string> = {
   duplicate_name: "Такое имя уже занято. Попробуйте добавить фамилию или ник.",
   invalid_token: "Секретная ссылка не найдена.",
-  deadline_passed: "Дедлайн этого этапа уже прошел.",
-  incomplete_stage: "Нужно заполнить все матчи этапа.",
+  deadline_passed: "Прогноз на этот матч уже открыт для всех и больше не меняется.",
+  incomplete_stage: "Заполните хотя бы один открытый матч. Пустые строки можно оставить пустыми.",
   not_found: "Данные не найдены.",
   unknown: "Что-то пошло не так."
 };

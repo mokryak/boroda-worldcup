@@ -15,8 +15,8 @@ export type Route =
   | { name: "edit"; token: string };
 
 export function App() {
-  const tournament = useTournamentState();
   const route = useMemo(() => parseRoute(currentAppPath(window.location.pathname)), []);
+  const tournament = useTournamentState(route.name === "edit" ? route.token : undefined);
 
   if (tournament.isLoading) {
     return (

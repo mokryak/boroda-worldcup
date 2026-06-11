@@ -2,18 +2,18 @@ import { Medal, Trophy } from "lucide-react";
 import { useState } from "react";
 import { StageTabs } from "../components/StageTabs";
 import { StatusPill } from "../components/StatusPill";
-import { formatDateTime } from "../components/format";
+import { formatDateTime, formatLocalTimeZoneLabel } from "../components/format";
 import {
   actualScore,
   getLeaderboard,
   getMatchScoreForParticipant,
   getMatchesForStage,
-  getParticipantStageSubmission,
+  getParticipantMatchSubmission,
   getPredictionMap,
   sortStages
 } from "../domain/selectors";
 import type { PublicState, StageId } from "../domain/types";
-import { isStageClosed } from "../domain/visibility";
+import { isPredictionVisible, stageHasEditableMatches } from "../domain/visibility";
 
 export function ResultsPage({ state }: { state: PublicState }) {
   const stages = sortStages(state.stages);
@@ -22,7 +22,8 @@ export function ResultsPage({ state }: { state: PublicState }) {
   const matches = getMatchesForStage(state, activeStageId);
   const leaderboard = getLeaderboard(state);
   const predictionMap = getPredictionMap(state.predictions);
-  const closed = isStageClosed(activeStage);
+  const open = stageHasEditableMatches(activeStage, state.matches);
+  const visibleCount = matches.filter((match) => isPredictionVisible(match, new Date(), matches)).length;
 
   return (
     <div className="stack">
@@ -50,8 +51,13 @@ export function ResultsPage({ state }: { state: PublicState }) {
         <StageTabs stages={stages} activeStageId={activeStageId} onChange={setActiveStageId} />
         <div className="stage-summary">
           <strong>{activeStage.title}</strong>
-          <StatusPill tone={closed ? "closed" : "open"}>{closed ? "Прогнозы открыты" : "Прогнозы скрыты"}</StatusPill>
+          <StatusPill tone={open ? "open" : "closed"}>
+            {visibleCount ? `Открыто ${visibleCount}/${matches.length}` : "Прогнозы скрыты"}
+          </StatusPill>
         </div>
+        <p className="timezone-note">
+          Время матчей локальное ({formatLocalTimeZoneLabel()}). В начале тура прогнозы открываются со стартом первого матча, дальше - за 24 часа до матча.
+        </p>
 
         <div className="matrix-scroll" role="region" aria-label="Матрица прогнозов">
           <table className="results-matrix">
@@ -65,39 +71,42 @@ export function ResultsPage({ state }: { state: PublicState }) {
               </tr>
             </thead>
             <tbody>
-              {matches.map((match) => (
-                <tr key={match.id}>
-                  <th>
-                    <span>{formatDateTime(match.kickoffUtc)}</span>
-                    {match.home} - {match.away}
-                  </th>
-                  <td>{actualScore(match) ? `${match.actualHome}:${match.actualAway}` : "—"}</td>
-                  {state.participants.map((participant) => {
-                    const prediction = predictionMap.get(`${participant.id}:${match.id}`);
-                    const submitted = getParticipantStageSubmission(state, activeStageId, participant.id);
-                    const points = getMatchScoreForParticipant(match, participant, state.predictions);
+              {matches.map((match) => {
+                const visible = isPredictionVisible(match, new Date(), matches);
+                return (
+                  <tr key={match.id}>
+                    <th>
+                      <span>{formatDateTime(match.kickoffUtc)}</span>
+                      {match.home} - {match.away}
+                    </th>
+                    <td>{actualScore(match) ? `${match.actualHome}:${match.actualAway}` : "—"}</td>
+                    {state.participants.map((participant) => {
+                      const prediction = predictionMap.get(`${participant.id}:${match.id}`);
+                      const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
+                      const points = getMatchScoreForParticipant(match, participant, state.predictions);
 
-                    return (
-                      <td key={participant.id}>
-                        {closed ? (
-                          prediction ? (
-                            <span className="prediction-cell">
-                              {prediction.predHome}:{prediction.predAway}
-                              <strong>{points}</strong>
-                            </span>
+                      return (
+                        <td key={participant.id}>
+                          {visible ? (
+                            prediction ? (
+                              <span className="prediction-cell">
+                                {prediction.predHome}:{prediction.predAway}
+                                <strong>{points}</strong>
+                              </span>
+                            ) : (
+                              "—"
+                            )
                           ) : (
-                            "—"
-                          )
-                        ) : (
-                          <span className={submitted ? "submitted-mark yes" : "submitted-mark"}>
-                            {submitted ? "сдал" : "нет"}
-                          </span>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+                            <span className={submitted ? "submitted-mark yes" : "submitted-mark"}>
+                              {submitted ? "сдал" : "нет"}
+                            </span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

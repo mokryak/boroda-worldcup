@@ -6,12 +6,18 @@ const SHEETS = {
   predictions: "Predictions"
 };
 
+const PREDICTION_LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 function doGet(event) {
-  const action = event.parameter.action || "state";
-  if (action === "state") {
-    return jsonOk(getPublicState_());
+  try {
+    const action = event.parameter.action || "state";
+    if (action === "state") {
+      return jsonOk(getPublicState_(event.parameter.editToken));
+    }
+    return jsonError_("not_found", "Unknown action", 404);
+  } catch (error) {
+    return jsonError_(error.code || "unknown", error.message || "Unknown error", error.status || 400);
   }
-  return jsonError_("not_found", "Unknown action", 404);
 }
 
 function doPost(event) {
@@ -66,7 +72,7 @@ function setupWorldCupPredictor() {
   ]);
 }
 
-function getPublicState_() {
+function getPublicState_(editToken) {
   const settings = getSettings_();
   const stages = rowsAsObjects_(SHEETS.stages).map((row) => ({
     id: row.id,
@@ -91,15 +97,23 @@ function getPublicState_() {
     displayName: row.display_name,
     createdAt: row.created_at
   }));
-  const visibleStageIds = new Set(
-    stages.filter((stage) => new Date(stage.deadlineUtc).getTime() <= Date.now()).map((stage) => stage.id)
-  );
+
+  let viewerParticipantId = null;
+  const cleanToken = String(editToken || "").trim();
+  if (cleanToken) {
+    const privateParticipant = rowsAsObjects_(SHEETS.participants).find((row) => row.edit_token === cleanToken);
+    if (!privateParticipant) {
+      throw appError_("invalid_token", "Invalid edit token");
+    }
+    viewerParticipantId = privateParticipant.participant_id;
+  }
+
   const visibleMatchIds = new Set(
-    matches.filter((match) => visibleStageIds.has(match.stageId)).map((match) => match.id)
+    matches.filter((match) => isPredictionVisible_(match, matches)).map((match) => match.id)
   );
   const allPredictions = rowsAsObjects_(SHEETS.predictions);
   const predictions = allPredictions
-    .filter((row) => visibleMatchIds.has(row.match_id))
+    .filter((row) => visibleMatchIds.has(row.match_id) || row.participant_id === viewerParticipantId)
     .map((row) => ({
       participantId: row.participant_id,
       matchId: row.match_id,
@@ -108,6 +122,7 @@ function getPublicState_() {
       updatedAt: row.updated_at
     }));
   const submittedByStage = {};
+  const submittedByMatch = {};
   const matchStageMap = {};
   matches.forEach((match) => {
     matchStageMap[match.id] = match.stageId;
@@ -119,10 +134,16 @@ function getPublicState_() {
     }
     submittedByStage[stageId] = submittedByStage[stageId] || new Set();
     submittedByStage[stageId].add(prediction.participant_id);
+    submittedByMatch[prediction.match_id] = submittedByMatch[prediction.match_id] || new Set();
+    submittedByMatch[prediction.match_id].add(prediction.participant_id);
   });
   const submittedStages = Object.keys(submittedByStage).map((stageId) => ({
     stageId,
     participantIds: Array.from(submittedByStage[stageId])
+  }));
+  const submittedMatches = Object.keys(submittedByMatch).map((matchId) => ({
+    matchId,
+    participantIds: Array.from(submittedByMatch[matchId])
   }));
 
   return {
@@ -132,7 +153,9 @@ function getPublicState_() {
     matches,
     participants,
     predictions,
-    submittedStages
+    submittedStages,
+    submittedMatches,
+    viewerParticipantId: viewerParticipantId || undefined
   };
 }
 
@@ -171,22 +194,32 @@ function savePredictions_(editToken, stageId, predictions) {
   if (!stage) {
     throw appError_("not_found", "Stage not found");
   }
-  if (new Date(stage.deadline_utc).getTime() <= Date.now()) {
-    throw appError_("deadline_passed", "Stage deadline has passed");
-  }
 
   const stageMatches = rowsAsObjects_(SHEETS.matches).filter((row) => row.stage_id === stageId);
-  const stageMatchIds = stageMatches.map((row) => row.id);
-  const submittedIds = new Set(predictions.map((prediction) => prediction.matchId));
-  const complete = stageMatchIds.every((matchId) => submittedIds.has(matchId));
-  if (!complete) {
-    throw appError_("incomplete_stage", "All stage matches are required");
+  const stageMatchMap = {};
+  stageMatches.forEach((match) => {
+    stageMatchMap[match.id] = match;
+  });
+
+  if (!predictions.length) {
+    throw appError_("incomplete_stage", "At least one open match is required");
   }
+
+  predictions.forEach((prediction) => {
+    const match = stageMatchMap[prediction.matchId];
+    if (!match) {
+      throw appError_("not_found", "Match not found");
+    }
+    if (!canEditMatch_(match, stageMatches)) {
+      throw appError_("deadline_passed", "Prediction is already public and locked");
+    }
+  });
 
   const predictionSheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.predictions);
   const existingRows = rowsAsObjects_(SHEETS.predictions);
+  const submittedIds = new Set(predictions.map((prediction) => prediction.matchId));
   const keepRows = existingRows.filter(
-    (row) => row.participant_id !== participant.participant_id || stageMatchIds.indexOf(row.match_id) === -1
+    (row) => row.participant_id !== participant.participant_id || !submittedIds.has(row.match_id)
   );
   const now = new Date().toISOString();
   const nextRows = keepRows.concat(
@@ -259,6 +292,35 @@ function toNullableNumber_(value) {
     return null;
   }
   return Number(value);
+}
+
+function predictionRevealAt_(match, stageMatches) {
+  const matchRevealAt = new Date(kickoffOf_(match)).getTime() - PREDICTION_LOCK_WINDOW_MS;
+  const stageId = stageOf_(match);
+  const stageStartAt = Math.min.apply(
+    null,
+    (stageMatches || [match])
+      .filter((stageMatch) => stageOf_(stageMatch) === stageId)
+      .map((stageMatch) => new Date(kickoffOf_(stageMatch)).getTime())
+  );
+
+  return new Date(Math.max(matchRevealAt, isFinite(stageStartAt) ? stageStartAt : matchRevealAt));
+}
+
+function isPredictionVisible_(match, stageMatches) {
+  return Date.now() >= predictionRevealAt_(match, stageMatches).getTime();
+}
+
+function canEditMatch_(match, stageMatches) {
+  return !isPredictionVisible_(match, stageMatches);
+}
+
+function kickoffOf_(match) {
+  return match.kickoffUtc || match.kickoff_at_utc;
+}
+
+function stageOf_(match) {
+  return match.stageId || match.stage_id;
 }
 
 function jsonOk(data) {

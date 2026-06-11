@@ -2,15 +2,15 @@ import { Link2, Save } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { apiClient, messageForApiError } from "../api/client";
 import { StageTabs } from "../components/StageTabs";
-import { formatDateTime } from "../components/format";
+import { formatDateTime, formatLocalTimeZoneLabel } from "../components/format";
 import {
   getMatchesForStage,
   getOpenStage,
   getPredictionMap,
   sortStages
 } from "../domain/selectors";
-import type { PublicState, SavePredictionInput, StageId } from "../domain/types";
-import { canEditStage } from "../domain/visibility";
+import type { Match, Prediction, PublicState, SavePredictionInput, StageId } from "../domain/types";
+import { canEditMatch, predictionRevealAt } from "../domain/visibility";
 import { appUrl } from "../routing";
 
 type PredictPageProps = {
@@ -33,17 +33,24 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
   const [isSaving, setSaving] = useState(false);
   const activeStage = stages.find((stage) => stage.id === activeStageId)!;
   const matches = getMatchesForStage(state, activeStageId);
-  const editable = canEditStage(activeStage);
   const predictionMap = useMemo(() => getPredictionMap(state.predictions), [state.predictions]);
+  const viewerParticipantId = state.viewerParticipantId;
+  const now = new Date();
+  const hasEditableMatches = matches.some((match) => canEditMatch(match, now, matches));
+  const timeZoneLabel = formatLocalTimeZoneLabel();
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
     setStatus(null);
 
-    const predictions = collectPredictions(matches.map((match) => match.id), scores);
+    const predictions = collectPredictions(matches, scores, predictionMap, viewerParticipantId);
     if (!predictions) {
-      setError("Заполните все счета этапа.");
+      setError("Заполните обе цифры счета или оставьте матч пустым.");
+      return;
+    }
+    if (!predictions.length) {
+      setError("Заполните хотя бы один открытый матч.");
       return;
     }
 
@@ -74,7 +81,7 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
           <div>
             <p className="eyebrow">Форма прогноза</p>
             <h2>{mode === "edit" ? "Редактирование по секретной ссылке" : "Новый участник"}</h2>
-            <p>Все матчи выбранного этапа обязательны. После дедлайна этап блокируется.</p>
+            <p>Можно заполнить любые открытые матчи. Пустые строки не сохраняются.</p>
           </div>
         </div>
 
@@ -112,16 +119,26 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
         <StageTabs stages={stages} activeStageId={activeStageId} onChange={setActiveStageId} />
         <div className="stage-summary">
           <strong>{activeStage.title}</strong>
-          <span>Дедлайн: {formatDateTime(activeStage.deadlineUtc)}</span>
+          <span>Время матчей: локальное ({timeZoneLabel})</span>
         </div>
 
-        {!editable && <div className="notice">Дедлайн этого этапа прошел. Сохранение закрыто.</div>}
+        <div className="notice">
+          В начале тура прогнозы можно подать до старта первого матча тура. После этого прогнозы
+          открываются для всех; для более поздних матчей действует блокировка за 24 часа до начала.
+        </div>
+
+        {!hasEditableMatches && (
+          <div className="notice">Все матчи этого этапа уже открыты для участников. Сохранение закрыто.</div>
+        )}
 
         <div className="match-form-list">
           {matches.map((match) => {
-            const prediction = predictionMap.get(`current:${match.id}`);
+            const prediction = getViewerPrediction(predictionMap, match.id, viewerParticipantId);
+            const matchEditable = canEditMatch(match, now, matches);
+            const homeValue = getScoreValue(scores, prediction, match.id, "home");
+            const awayValue = getScoreValue(scores, prediction, match.id, "away");
             return (
-              <article className="match-form-row" key={match.id}>
+              <article className={matchEditable ? "match-form-row" : "match-form-row locked"} key={match.id}>
                 <div>
                   <p className="match-meta">
                     {formatDateTime(match.kickoffUtc)} · {match.groupOrRound}
@@ -129,6 +146,11 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
                   <h3>
                     {match.home} <span>vs</span> {match.away}
                   </h3>
+                  {!matchEditable && (
+                    <p className="lock-note">
+                      Открыт для всех с {formatDateTime(predictionRevealAt(match, matches).toISOString())}
+                    </p>
+                  )}
                 </div>
                 <div className="score-inputs">
                   <input
@@ -136,12 +158,15 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
                     inputMode="numeric"
                     min="0"
                     type="number"
-                    value={scores[match.id]?.home ?? prediction?.predHome ?? ""}
-                    disabled={!editable}
+                    value={homeValue}
+                    disabled={!matchEditable}
                     onChange={(event) =>
                       setScores((current) => ({
                         ...current,
-                        [match.id]: { home: event.target.value, away: current[match.id]?.away ?? "" }
+                        [match.id]: {
+                          home: event.target.value,
+                          away: getScoreValue(current, prediction, match.id, "away")
+                        }
                       }))
                     }
                   />
@@ -151,12 +176,15 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
                     inputMode="numeric"
                     min="0"
                     type="number"
-                    value={scores[match.id]?.away ?? prediction?.predAway ?? ""}
-                    disabled={!editable}
+                    value={awayValue}
+                    disabled={!matchEditable}
                     onChange={(event) =>
                       setScores((current) => ({
                         ...current,
-                        [match.id]: { home: current[match.id]?.home ?? "", away: event.target.value }
+                        [match.id]: {
+                          home: getScoreValue(current, prediction, match.id, "home"),
+                          away: event.target.value
+                        }
                       }))
                     }
                   />
@@ -171,7 +199,7 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
       {status && <div className="notice success">{status}</div>}
 
       <div className="sticky-submit">
-        <button className="primary-action" type="submit" disabled={!editable || isSaving}>
+        <button className="primary-action" type="submit" disabled={!hasEditableMatches || isSaving}>
           <Save size={18} aria-hidden />
           {isSaving ? "Сохраняем" : "Сохранить прогноз"}
         </button>
@@ -181,20 +209,56 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
 }
 
 function collectPredictions(
-  matchIds: string[],
-  scores: Record<string, { home: string; away: string }>
+  matches: Match[],
+  scores: Record<string, { home: string; away: string }>,
+  predictionMap: Map<string, Prediction>,
+  viewerParticipantId?: string
 ): SavePredictionInput[] | null {
   const predictions: SavePredictionInput[] = [];
-  for (const matchId of matchIds) {
-    const score = scores[matchId];
-    if (!score || score.home === "" || score.away === "") {
+  for (const match of matches) {
+    if (!canEditMatch(match, new Date(), matches)) {
+      continue;
+    }
+
+    const prediction = getViewerPrediction(predictionMap, match.id, viewerParticipantId);
+    const home = getScoreValue(scores, prediction, match.id, "home");
+    const away = getScoreValue(scores, prediction, match.id, "away");
+    if (home === "" && away === "") {
+      continue;
+    }
+    if (home === "" || away === "") {
       return null;
     }
     predictions.push({
-      matchId,
-      predHome: Number(score.home),
-      predAway: Number(score.away)
+      matchId: match.id,
+      predHome: Number(home),
+      predAway: Number(away)
     });
   }
   return predictions;
+}
+
+function getViewerPrediction(
+  predictionMap: Map<string, Prediction>,
+  matchId: string,
+  viewerParticipantId?: string
+): Prediction | undefined {
+  if (!viewerParticipantId) {
+    return undefined;
+  }
+  return predictionMap.get(`${viewerParticipantId}:${matchId}`);
+}
+
+function getScoreValue(
+  scores: Record<string, { home: string; away: string }>,
+  prediction: Prediction | undefined,
+  matchId: string,
+  side: "home" | "away"
+): string {
+  const current = scores[matchId]?.[side];
+  if (typeof current !== "undefined") {
+    return current;
+  }
+  const predicted = side === "home" ? prediction?.predHome : prediction?.predAway;
+  return typeof predicted === "number" ? String(predicted) : "";
 }

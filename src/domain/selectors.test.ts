@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getLeaderboard } from "./selectors";
+import { getLeaderboard, getOpenStage } from "./selectors";
 import type { PublicState } from "./types";
 
 const state: PublicState = {
@@ -47,18 +47,37 @@ const state: PublicState = {
       updatedAt: "2026-06-10T00:00:00.000Z"
     }
   ],
-  submittedStages: [{ stageId: "group-md1", participantIds: ["p1", "p2"] }]
+  submittedStages: [{ stageId: "group-md1", participantIds: ["p1", "p2"] }],
+  submittedMatches: [{ matchId: "m001", participantIds: ["p1", "p2"] }]
 };
 
 describe("getLeaderboard", () => {
-  it("uses only stages visible after deadline", () => {
-    expect(getLeaderboard(state, new Date("2026-06-11T17:59:59.000Z")).map((row) => row.total)).toEqual([
+  it("uses only matches visible after the stage-start adjusted reveal window", () => {
+    expect(getLeaderboard(state, new Date("2026-06-11T18:59:59.000Z")).map((row) => row.total)).toEqual([
       0,
       0
     ]);
-    expect(getLeaderboard(state, new Date("2026-06-11T18:00:00.000Z")).map((row) => row.total)).toEqual([
+    expect(getLeaderboard(state, new Date("2026-06-11T19:00:00.000Z")).map((row) => row.total)).toEqual([
       5,
       4
     ]);
+  });
+
+  it("keeps a stage open while any match can still be edited", () => {
+    const mixedState: PublicState = {
+      ...state,
+      matches: [
+        state.matches[0],
+        {
+          ...state.matches[0],
+          id: "m002",
+          kickoffUtc: "2026-06-13T19:00:00.000Z",
+          displayOrder: 2
+        }
+      ]
+    };
+
+    expect(getOpenStage(mixedState, new Date("2026-06-11T19:00:00.000Z"))?.id).toBe("group-md1");
+    expect(getOpenStage(mixedState, new Date("2026-06-12T19:00:00.000Z"))).toBeNull();
   });
 });

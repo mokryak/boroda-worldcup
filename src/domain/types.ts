@@ -49,6 +49,11 @@ export type SubmittedStage = {
   participantIds: string[];
 };
 
+export type SubmittedMatch = {
+  matchId: string;
+  participantIds: string[];
+};
+
 export type PublicState = {
   tournamentName: string;
   generatedAt: string;
@@ -57,6 +62,8 @@ export type PublicState = {
   participants: Participant[];
   predictions: Prediction[];
   submittedStages: SubmittedStage[];
+  submittedMatches: SubmittedMatch[];
+  viewerParticipantId?: string;
 };
 
 export type SavePredictionInput = {

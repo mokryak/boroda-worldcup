@@ -1,6 +1,6 @@
 import { scorePrediction } from "./scoring";
 import type { Match, Participant, Prediction, PublicState, Stage, StageId } from "./types";
-import { isStageClosed } from "./visibility";
+import { canEditMatch, isPredictionVisible, stageHasEditableMatches } from "./visibility";
 
 export function sortStages(stages: Stage[]): Stage[] {
   return [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
@@ -17,7 +17,9 @@ export function sortMatches(matches: Match[]): Match[] {
 }
 
 export function getOpenStage(state: PublicState, now = new Date()): Stage | null {
-  return sortStages(state.stages).find((stage) => !isStageClosed(stage, now)) ?? null;
+  return (
+    sortStages(state.stages).find((stage) => stageHasEditableMatches(stage, state.matches, now)) ?? null
+  );
 }
 
 export function getMatchesForStage(state: PublicState, stageId: StageId): Match[] {
@@ -44,16 +46,25 @@ export function getParticipantStageSubmission(
   );
 }
 
+export function getParticipantMatchSubmission(
+  state: PublicState,
+  matchId: string,
+  participantId: string
+): boolean {
+  return (
+    state.submittedMatches
+      .find((submittedMatch) => submittedMatch.matchId === matchId)
+      ?.participantIds.includes(participantId) ?? false
+  );
+}
+
 export function getLeaderboard(state: PublicState, now = new Date()) {
   const predictionMap = getPredictionMap(state.predictions);
-  const closedStageIds = new Set(
-    state.stages.filter((stage) => isStageClosed(stage, now)).map((stage) => stage.id)
-  );
 
   return [...state.participants]
     .map((participant) => {
       const total = state.matches.reduce((sum, match) => {
-        if (!closedStageIds.has(match.stageId)) {
+        if (!isPredictionVisible(match, now, state.matches)) {
           return sum;
         }
 
@@ -70,6 +81,11 @@ export function getLeaderboard(state: PublicState, now = new Date()) {
       return { participant, total };
     })
     .sort((a, b) => b.total - a.total || a.participant.displayName.localeCompare(b.participant.displayName));
+}
+
+export function getEditableMatchesForStage(state: PublicState, stageId: StageId, now = new Date()): Match[] {
+  const matches = getMatchesForStage(state, stageId);
+  return matches.filter((match) => canEditMatch(match, now, matches));
 }
 
 export function getMatchScoreForParticipant(

@@ -1,9 +1,9 @@
 import { ArrowRight, CheckCircle2, Clock3, Users } from "lucide-react";
 import { StatusPill } from "../components/StatusPill";
-import { formatDateTime } from "../components/format";
+import { formatDateTime, formatLocalTimeZoneLabel } from "../components/format";
 import { getMatchesForStage, getOpenStage, sortStages } from "../domain/selectors";
 import type { PublicState, Stage } from "../domain/types";
-import { isStageClosed } from "../domain/visibility";
+import { stageHasEditableMatches } from "../domain/visibility";
 import { appHref } from "../routing";
 
 export function HomePage({ state }: { state: PublicState }) {
@@ -17,9 +17,10 @@ export function HomePage({ state }: { state: PublicState }) {
           <p className="eyebrow">Без логинов и лишней возни</p>
           <h2>{state.tournamentName}</h2>
           <p>
-            Заполняйте прогнозы этапами. До дедлайна виден только список сдавших, после дедлайна
-            открываются прогнозы, очки и общая таблица.
+            Заполняйте прогнозы этапами. В начале тура можно подать прогноз до первого матча,
+            потом прогнозы открываются для всех; более поздние матчи закрываются за 24 часа.
           </p>
+          <p className="timezone-note">Время матчей показано в вашем локальном часовом поясе: {formatLocalTimeZoneLabel()}.</p>
         </div>
         <div className="action-strip">
           <a className="primary-action" href={appHref("/predict")}>
@@ -44,16 +45,16 @@ export function HomePage({ state }: { state: PublicState }) {
         <div className="stage-list">
           {stages.map((stage) => {
             const matches = getMatchesForStage(state, stage.id);
-            const closed = isStageClosed(stage);
+            const open = stageHasEditableMatches(stage, state.matches);
             return (
               <article className="stage-row" key={stage.id}>
                 <div>
                   <h3>{stage.title}</h3>
                   <p>
-                    {matches.length} матчей, дедлайн {formatDateTime(stage.deadlineUtc)}
+                    {matches.length} матчей, первый старт {formatDateTime(matches[0]?.kickoffUtc ?? stage.deadlineUtc)}
                   </p>
                 </div>
-                <StatusPill tone={closed ? "closed" : "open"}>{closed ? "Закрыт" : "Открыт"}</StatusPill>
+                <StatusPill tone={open ? "open" : "closed"}>{open ? "Есть открытые" : "Закрыт"}</StatusPill>
               </article>
             );
           })}
@@ -77,7 +78,7 @@ function OpenStageCard({ state, stage }: { state: PublicState; stage: Stage }) {
         <div>
           <p className="eyebrow">Открытый этап</p>
           <h2>{stage.title}</h2>
-          <p>{matches.length} матчей до {formatDateTime(stage.deadlineUtc)}</p>
+          <p>{matches.length} матчей, время локальное ({formatLocalTimeZoneLabel()})</p>
         </div>
         <Clock3 size={28} aria-hidden />
       </div>
