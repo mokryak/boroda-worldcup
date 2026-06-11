@@ -1,5 +1,5 @@
 import { scorePrediction } from "./scoring";
-import type { Match, Participant, Prediction, PublicState, Stage, StageId } from "./types";
+import type { LiveScore, Match, Participant, Prediction, PublicState, Stage, StageId } from "./types";
 import { canEditMatch, isPredictionVisible, stageHasEditableMatches } from "./visibility";
 
 export function sortStages(stages: Stage[]): Stage[] {
@@ -91,14 +91,15 @@ export function getEditableMatchesForStage(state: PublicState, stageId: StageId,
 export function getMatchScoreForParticipant(
   match: Match,
   participant: Participant,
-  predictions: Prediction[]
+  predictions: Prediction[],
+  liveScore?: LiveScore
 ): number {
   const prediction = predictions.find(
     (item) => item.matchId === match.id && item.participantId === participant.id
   );
 
   return scorePrediction(
-    actualScore(match),
+    matchScore(match, liveScore),
     prediction ? { home: prediction.predHome, away: prediction.predAway } : null
   );
 }
@@ -108,4 +109,15 @@ export function actualScore(match: Match) {
     return null;
   }
   return { home: match.actualHome, away: match.actualAway };
+}
+
+export function getLiveScoreMap(liveScores: LiveScore[] = []): Map<string, LiveScore> {
+  return new Map(liveScores.map((liveScore) => [liveScore.matchId, liveScore]));
+}
+
+export function matchScore(match: Match, liveScore?: LiveScore) {
+  if (liveScore) {
+    return { home: liveScore.home, away: liveScore.away };
+  }
+  return actualScore(match);
 }

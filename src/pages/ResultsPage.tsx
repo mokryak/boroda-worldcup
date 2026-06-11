@@ -6,13 +6,15 @@ import { formatDateTime, formatLocalTimeZoneLabel } from "../components/format";
 import {
   actualScore,
   getLeaderboard,
+  getLiveScoreMap,
   getMatchScoreForParticipant,
   getMatchesForStage,
   getParticipantMatchSubmission,
   getPredictionMap,
+  matchScore,
   sortStages
 } from "../domain/selectors";
-import type { Match, Participant, Prediction, PublicState, StageId } from "../domain/types";
+import type { LiveScore, Match, Participant, Prediction, PublicState, StageId } from "../domain/types";
 import { isPredictionVisible, stageHasEditableMatches } from "../domain/visibility";
 
 export function ResultsPage({ state }: { state: PublicState }) {
@@ -24,6 +26,7 @@ export function ResultsPage({ state }: { state: PublicState }) {
   const selectedMatch = selectedMatchId ? matches.find((match) => match.id === selectedMatchId) : undefined;
   const leaderboard = getLeaderboard(state);
   const predictionMap = getPredictionMap(state.predictions);
+  const liveScoreMap = getLiveScoreMap(state.liveScores);
   const open = stageHasEditableMatches(activeStage, state.matches);
   const visibleCount = matches.filter((match) => isPredictionVisible(match, new Date(), matches)).length;
   const handleStageChange = (stageId: StageId) => {
@@ -107,7 +110,12 @@ export function ResultsPage({ state }: { state: PublicState }) {
                     {state.participants.map((participant) => {
                       const prediction = predictionMap.get(`${participant.id}:${match.id}`);
                       const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
-                      const points = getMatchScoreForParticipant(match, participant, state.predictions);
+                      const points = getMatchScoreForParticipant(
+                        match,
+                        participant,
+                        state.predictions,
+                        liveScoreMap.get(match.id)
+                      );
 
                       return (
                         <td key={participant.id}>
@@ -144,6 +152,7 @@ export function ResultsPage({ state }: { state: PublicState }) {
           predictionMap={predictionMap}
           predictions={state.predictions}
           state={state}
+          liveScore={liveScoreMap.get(selectedMatch.id)}
           onClose={() => setSelectedMatchId(null)}
         />
       )}
@@ -163,6 +172,7 @@ type MatchPredictionsDialogProps = {
   predictionMap: Map<string, Prediction>;
   predictions: Prediction[];
   state: PublicState;
+  liveScore?: LiveScore;
   onClose: () => void;
 };
 
@@ -173,9 +183,11 @@ function MatchPredictionsDialog({
   predictionMap,
   predictions,
   state,
+  liveScore,
   onClose
 }: MatchPredictionsDialogProps) {
   const visible = isPredictionVisible(match, new Date(), matches);
+  const score = matchScore(match, liveScore);
 
   return (
     <div
@@ -203,7 +215,8 @@ function MatchPredictionsDialog({
         <div className="match-dialog-meta">
           <span>{match.groupOrRound}</span>
           <span>
-            Счет: <strong>{actualScore(match) ? `${match.actualHome}:${match.actualAway}` : "—"}</strong>
+            {liveScore?.status === "live" ? `LIVE${liveScore.minute ? ` ${liveScore.minute}'` : ""}` : "Счет"}:{" "}
+            <strong>{score ? `${score.home}:${score.away}` : "—"}</strong>
           </span>
         </div>
 
@@ -222,7 +235,7 @@ function MatchPredictionsDialog({
           {participants.map((participant) => {
             const prediction = predictionMap.get(`${participant.id}:${match.id}`);
             const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
-            const points = getMatchScoreForParticipant(match, participant, predictions);
+            const points = getMatchScoreForParticipant(match, participant, predictions, liveScore);
 
             return (
               <div className="dialog-prediction-row" key={participant.id}>

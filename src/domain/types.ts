@@ -54,6 +54,16 @@ export type SubmittedMatch = {
   participantIds: string[];
 };
 
+export type LiveScore = {
+  matchId: string;
+  home: number;
+  away: number;
+  status: "live" | "complete";
+  minute: number | null;
+  updatedAt: string;
+  provider?: string;
+};
+
 export type PublicState = {
   tournamentName: string;
   generatedAt: string;
@@ -63,6 +73,7 @@ export type PublicState = {
   predictions: Prediction[];
   submittedStages: SubmittedStage[];
   submittedMatches: SubmittedMatch[];
+  liveScores?: LiveScore[];
   viewerParticipantId?: string;
 };
 

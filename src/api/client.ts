@@ -192,6 +192,7 @@ function migrateMockDb(db: MockDb): MockDb {
     ...db,
     submittedStages: db.submittedStages ?? [],
     submittedMatches: db.submittedMatches ?? [],
+    liveScores: db.liveScores ?? [],
     tokens: db.tokens ?? {}
   };
 }

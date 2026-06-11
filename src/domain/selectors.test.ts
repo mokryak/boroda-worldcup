@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getLeaderboard, getOpenStage } from "./selectors";
+import { getLeaderboard, getMatchScoreForParticipant, getOpenStage } from "./selectors";
 import type { PublicState } from "./types";
 
 const state: PublicState = {
@@ -79,5 +79,23 @@ describe("getLeaderboard", () => {
 
     expect(getOpenStage(mixedState, new Date("2026-06-11T19:00:00.000Z"))?.id).toBe("group-md1");
     expect(getOpenStage(mixedState, new Date("2026-06-12T19:00:00.000Z"))).toBeNull();
+  });
+
+  it("can score a participant against a live score without waiting for the final result", () => {
+    const liveState: PublicState = {
+      ...state,
+      matches: [{ ...state.matches[0], actualHome: null, actualAway: null, status: "scheduled" }]
+    };
+
+    expect(
+      getMatchScoreForParticipant(liveState.matches[0], liveState.participants[0], liveState.predictions, {
+        matchId: "m001",
+        home: 2,
+        away: 1,
+        status: "live",
+        minute: 63,
+        updatedAt: "2026-06-11T20:03:00.000Z"
+      })
+    ).toBe(5);
   });
 });

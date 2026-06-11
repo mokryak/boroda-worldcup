@@ -7,6 +7,32 @@ const SHEETS = {
 };
 
 const PREDICTION_LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
+const LIVE_SCORE_WINDOW_BEFORE_MS = 15 * 60 * 1000;
+const LIVE_SCORE_WINDOW_AFTER_MS = 4 * 60 * 60 * 1000;
+const LIVE_SCORE_CACHE_SECONDS = 45;
+const SPORTMONKS_LIVESCORES_URL = "https://api.sportmonks.com/v3/football/livescores";
+const SPORTMONKS_FINAL_STATE_IDS = new Set([5, 8]);
+
+const TEAM_ALIASES = {
+  "bosnia and herzegovina": "bosnia herzegovina",
+  "bosnia herzegovina": "bosnia herzegovina",
+  "cabo verde": "cape verde",
+  "cape verde": "cape verde",
+  "cote divoire": "ivory coast",
+  "cote d ivoire": "ivory coast",
+  "côte divoire": "ivory coast",
+  "czech republic": "czechia",
+  "czechia": "czechia",
+  "ivory coast": "ivory coast",
+  "korea republic": "south korea",
+  "south korea": "south korea",
+  "turkey": "turkiye",
+  "turkiye": "turkiye",
+  "türkiye": "turkiye",
+  "usa": "united states",
+  "united states": "united states",
+  "united states of america": "united states"
+};
 
 function doGet(event) {
   try {
@@ -72,6 +98,23 @@ function setupWorldCupPredictor() {
   ]);
 }
 
+function installLiveScoreTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter((trigger) => trigger.getHandlerFunction() === "refreshLiveScoresCron")
+    .forEach((trigger) => ScriptApp.deleteTrigger(trigger));
+  ScriptApp.newTrigger("refreshLiveScoresCron").timeBased().everyMinutes(1).create();
+}
+
+function refreshLiveScoresCron() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    refreshLiveScores_(readMatches_());
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function getPublicState_(editToken) {
   const settings = getSettings_();
   const stages = rowsAsObjects_(SHEETS.stages).map((row) => ({
@@ -80,18 +123,11 @@ function getPublicState_(editToken) {
     deadlineUtc: row.deadline_utc,
     displayOrder: Number(row.display_order)
   }));
-  const matches = rowsAsObjects_(SHEETS.matches).map((row) => ({
-    id: row.id,
-    stageId: row.stage_id,
-    kickoffUtc: row.kickoff_at_utc,
-    groupOrRound: row.group_round,
-    home: row.home,
-    away: row.away,
-    actualHome: toNullableNumber_(row.actual_home),
-    actualAway: toNullableNumber_(row.actual_away),
-    status: row.status || "scheduled",
-    displayOrder: Number(row.display_order)
-  }));
+  let matches = readMatches_();
+  const liveScores = refreshLiveScores_(matches);
+  if (liveScores.finalizedMatchIds.length) {
+    matches = readMatches_();
+  }
   const participants = rowsAsObjects_(SHEETS.participants).map((row) => ({
     id: row.participant_id,
     displayName: row.display_name,
@@ -155,8 +191,24 @@ function getPublicState_(editToken) {
     predictions,
     submittedStages,
     submittedMatches,
+    liveScores: liveScores.items,
     viewerParticipantId: viewerParticipantId || undefined
   };
+}
+
+function readMatches_() {
+  return rowsAsObjects_(SHEETS.matches).map((row) => ({
+    id: row.id,
+    stageId: row.stage_id,
+    kickoffUtc: row.kickoff_at_utc,
+    groupOrRound: row.group_round,
+    home: row.home,
+    away: row.away,
+    actualHome: toNullableNumber_(row.actual_home),
+    actualAway: toNullableNumber_(row.actual_away),
+    status: row.status || "scheduled",
+    displayOrder: Number(row.display_order)
+  }));
 }
 
 function registerParticipant_(displayName) {
@@ -233,6 +285,269 @@ function savePredictions_(editToken, stageId, predictions) {
   );
 
   rewriteSheet_(predictionSheet, ["participant_id", "match_id", "pred_home", "pred_away", "updated_at"], nextRows);
+}
+
+function refreshLiveScores_(matches) {
+  const candidates = getLiveScoreCandidates_(matches, new Date());
+  if (!candidates.length) {
+    return { items: [], finalizedMatchIds: [] };
+  }
+
+  const token = PropertiesService.getScriptProperties().getProperty("SPORTMONKS_API_TOKEN");
+  if (!token) {
+    return { items: [], finalizedMatchIds: [] };
+  }
+
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get("sportmonks_live_scores");
+  let providerFixtures;
+  if (cached) {
+    providerFixtures = JSON.parse(cached);
+  } else {
+    providerFixtures = fetchSportmonksLivescores_(token);
+    cache.put("sportmonks_live_scores", JSON.stringify(providerFixtures), LIVE_SCORE_CACHE_SECONDS);
+  }
+
+  const liveItems = [];
+  const finalized = [];
+  candidates.forEach((match) => {
+    const fixture = findProviderFixture_(match, providerFixtures);
+    if (!fixture) {
+      return;
+    }
+
+    const score = extractSportmonksScore_(fixture, match);
+    if (!score) {
+      return;
+    }
+
+    const status = sportmonksStatus_(fixture);
+    liveItems.push({
+      matchId: match.id,
+      home: score.home,
+      away: score.away,
+      status: status.status,
+      minute: status.minute,
+      updatedAt: new Date().toISOString(),
+      provider: "sportmonks"
+    });
+
+    if (status.status === "complete") {
+      finalized.push({ matchId: match.id, home: score.home, away: score.away });
+    }
+  });
+
+  if (finalized.length) {
+    writeFinalScores_(finalized);
+  }
+
+  return {
+    items: liveItems,
+    finalizedMatchIds: finalized.map((item) => item.matchId)
+  };
+}
+
+function getLiveScoreCandidates_(matches, now) {
+  const nowMs = now.getTime();
+  return matches.filter((match) => {
+    if (match.status === "complete" && match.actualHome !== null && match.actualAway !== null) {
+      return false;
+    }
+
+    const kickoffMs = new Date(match.kickoffUtc).getTime();
+    return nowMs >= kickoffMs - LIVE_SCORE_WINDOW_BEFORE_MS && nowMs <= kickoffMs + LIVE_SCORE_WINDOW_AFTER_MS;
+  });
+}
+
+function fetchSportmonksLivescores_(token) {
+  const url =
+    SPORTMONKS_LIVESCORES_URL +
+    "?api_token=" +
+    encodeURIComponent(token) +
+    "&include=" +
+    encodeURIComponent("participants;scores;state;periods");
+  const response = UrlFetchApp.fetch(url, {
+    muteHttpExceptions: true,
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  const statusCode = response.getResponseCode();
+  if (statusCode < 200 || statusCode >= 300) {
+    return [];
+  }
+
+  const payload = JSON.parse(response.getContentText());
+  if (Array.isArray(payload.data)) {
+    return payload.data;
+  }
+  return payload.data ? [payload.data] : [];
+}
+
+function findProviderFixture_(match, fixtures) {
+  const expectedHome = canonicalTeam_(match.home);
+  const expectedAway = canonicalTeam_(match.away);
+
+  return fixtures.find((fixture) => {
+    const teams = extractSportmonksTeams_(fixture);
+    if (!teams.home || !teams.away) {
+      return false;
+    }
+    return canonicalTeam_(teams.home) === expectedHome && canonicalTeam_(teams.away) === expectedAway;
+  });
+}
+
+function extractSportmonksTeams_(fixture) {
+  const teams = { home: "", away: "" };
+  const participants = fixture.participants || [];
+  participants.forEach((participant) => {
+    const location = String((participant.meta && participant.meta.location) || participant.location || "").toLowerCase();
+    if (location === "home") {
+      teams.home = participant.name || participant.short_code || "";
+    }
+    if (location === "away") {
+      teams.away = participant.name || participant.short_code || "";
+    }
+  });
+
+  if ((!teams.home || !teams.away) && fixture.name) {
+    const parts = String(fixture.name).split(/\s+(?:vs|v)\s+/i);
+    if (parts.length === 2) {
+      teams.home = teams.home || parts[0];
+      teams.away = teams.away || parts[1];
+    }
+  }
+
+  return teams;
+}
+
+function extractSportmonksScore_(fixture, match) {
+  if (typeof fixture.home_score === "number" && typeof fixture.away_score === "number") {
+    return { home: fixture.home_score, away: fixture.away_score };
+  }
+  if (fixture.goals && typeof fixture.goals.home === "number" && typeof fixture.goals.away === "number") {
+    return { home: fixture.goals.home, away: fixture.goals.away };
+  }
+
+  const participants = fixture.participants || [];
+  const participantLocations = {};
+  participants.forEach((participant) => {
+    const location = String((participant.meta && participant.meta.location) || participant.location || "").toLowerCase();
+    if (location === "home" || location === "away") {
+      participantLocations[participant.id] = location;
+    }
+  });
+
+  const scores = fixture.scores || [];
+  const preferred = ["current", "2nd-half", "1st-half", "fulltime", "full-time", "ft"];
+  const best = {};
+  scores.forEach((item) => {
+    const description = String(item.description || (item.type && item.type.name) || item.type || "").toLowerCase();
+    const scoreObject = item.score || {};
+    const participantId = item.participant_id || scoreObject.participant_id || scoreObject.participant;
+    const location = participantLocations[participantId];
+    const goals = toNullableNumber_(scoreObject.goals ?? item.goals ?? scoreObject.score ?? item.score);
+    if (!location || goals === null || Number.isNaN(goals)) {
+      return;
+    }
+    const priority = Math.max(0, preferred.findIndex((label) => description.indexOf(label) !== -1) + 1);
+    const current = best[location];
+    if (!current || priority >= current.priority) {
+      best[location] = { goals, priority };
+    }
+  });
+
+  if (best.home && best.away) {
+    return { home: Number(best.home.goals), away: Number(best.away.goals) };
+  }
+
+  const resultInfoScore = String(fixture.result_info || "").match(/(\d+)\s*-\s*(\d+)/);
+  if (resultInfoScore) {
+    return { home: Number(resultInfoScore[1]), away: Number(resultInfoScore[2]) };
+  }
+
+  return null;
+}
+
+function sportmonksStatus_(fixture) {
+  const stateId = Number(fixture.state_id);
+  const stateName = String(
+    (fixture.state && (fixture.state.short_name || fixture.state.name || fixture.state.developer_name)) || ""
+  ).toLowerCase();
+  const complete =
+    SPORTMONKS_FINAL_STATE_IDS.has(stateId) ||
+    stateName.indexOf("finished") !== -1 ||
+    stateName.indexOf("full") !== -1 ||
+    stateName === "ft";
+  const minute = extractSportmonksMinute_(fixture);
+
+  return {
+    status: complete ? "complete" : "live",
+    minute
+  };
+}
+
+function extractSportmonksMinute_(fixture) {
+  if (typeof fixture.minute === "number") {
+    return fixture.minute;
+  }
+  const periods = fixture.periods || [];
+  const ticking = periods.find((period) => period.ticking);
+  const latest = ticking || periods[periods.length - 1];
+  if (latest && typeof latest.minutes === "number") {
+    return latest.minutes;
+  }
+  return null;
+}
+
+function writeFinalScores_(scores) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.matches);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) {
+    return;
+  }
+
+  const headers = values[0].map((header) => String(header).trim());
+  const idIndex = headers.indexOf("id");
+  const homeIndex = headers.indexOf("actual_home");
+  const awayIndex = headers.indexOf("actual_away");
+  const statusIndex = headers.indexOf("status");
+  const scoreByMatch = {};
+  scores.forEach((score) => {
+    scoreByMatch[score.matchId] = score;
+  });
+
+  let changed = false;
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
+    const score = scoreByMatch[values[rowIndex][idIndex]];
+    if (!score) {
+      continue;
+    }
+    values[rowIndex][homeIndex] = score.home;
+    values[rowIndex][awayIndex] = score.away;
+    values[rowIndex][statusIndex] = "complete";
+    changed = true;
+  }
+
+  if (changed) {
+    sheet.getRange(1, 1, values.length, headers.length).setValues(values);
+  }
+}
+
+function canonicalTeam_(name) {
+  const normalized = normalizeTeam_(name);
+  return TEAM_ALIASES[normalized] || normalized;
+}
+
+function normalizeTeam_(name) {
+  return String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function rowsAsObjects_(sheetName) {
