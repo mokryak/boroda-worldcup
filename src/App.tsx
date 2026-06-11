@@ -72,6 +72,9 @@ export const navigation = [
 
 function parseRoute(pathname: string): Route {
   const normalized = pathname.replace(/\/+$/, "") || "/";
+  if (normalized === "/") {
+    return { name: "results" };
+  }
   if (normalized === "/predict") {
     return { name: "predict" };
   }

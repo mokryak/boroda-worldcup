@@ -1,4 +1,4 @@
-import { Medal, Trophy } from "lucide-react";
+import { Medal, Trophy, X } from "lucide-react";
 import { useState } from "react";
 import { StageTabs } from "../components/StageTabs";
 import { StatusPill } from "../components/StatusPill";
@@ -12,18 +12,24 @@ import {
   getPredictionMap,
   sortStages
 } from "../domain/selectors";
-import type { PublicState, StageId } from "../domain/types";
+import type { Match, Participant, Prediction, PublicState, StageId } from "../domain/types";
 import { isPredictionVisible, stageHasEditableMatches } from "../domain/visibility";
 
 export function ResultsPage({ state }: { state: PublicState }) {
   const stages = sortStages(state.stages);
   const [activeStageId, setActiveStageId] = useState<StageId>(stages[0].id);
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
   const activeStage = stages.find((stage) => stage.id === activeStageId)!;
   const matches = getMatchesForStage(state, activeStageId);
+  const selectedMatch = selectedMatchId ? matches.find((match) => match.id === selectedMatchId) : undefined;
   const leaderboard = getLeaderboard(state);
   const predictionMap = getPredictionMap(state.predictions);
   const open = stageHasEditableMatches(activeStage, state.matches);
   const visibleCount = matches.filter((match) => isPredictionVisible(match, new Date(), matches)).length;
+  const handleStageChange = (stageId: StageId) => {
+    setActiveStageId(stageId);
+    setSelectedMatchId(null);
+  };
 
   return (
     <div className="stack">
@@ -48,7 +54,7 @@ export function ResultsPage({ state }: { state: PublicState }) {
       </section>
 
       <section className="panel">
-        <StageTabs stages={stages} activeStageId={activeStageId} onChange={setActiveStageId} />
+        <StageTabs stages={stages} activeStageId={activeStageId} onChange={handleStageChange} />
         <div className="stage-summary">
           <strong>{activeStage.title}</strong>
           <StatusPill tone={open ? "open" : "closed"}>
@@ -74,10 +80,28 @@ export function ResultsPage({ state }: { state: PublicState }) {
               {matches.map((match) => {
                 const visible = isPredictionVisible(match, new Date(), matches);
                 return (
-                  <tr key={match.id}>
+                  <tr
+                    className="results-match-row"
+                    key={match.id}
+                    onClick={() => setSelectedMatchId(match.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedMatchId(match.id);
+                      }
+                    }}
+                    tabIndex={0}
+                    title="Открыть прогнозы по матчу"
+                  >
                     <th>
-                      <span>{formatDateTime(match.kickoffUtc)}</span>
-                      {match.home} - {match.away}
+                      <button
+                        className="match-row-button"
+                        type="button"
+                        onClick={() => setSelectedMatchId(match.id)}
+                      >
+                        <span>{formatDateTime(match.kickoffUtc)}</span>
+                        {match.home} - {match.away}
+                      </button>
                     </th>
                     <td>{actualScore(match) ? `${match.actualHome}:${match.actualAway}` : "—"}</td>
                     {state.participants.map((participant) => {
@@ -112,9 +136,110 @@ export function ResultsPage({ state }: { state: PublicState }) {
         </div>
       </section>
 
+      {selectedMatch && (
+        <MatchPredictionsDialog
+          match={selectedMatch}
+          matches={matches}
+          participants={state.participants}
+          predictionMap={predictionMap}
+          predictions={state.predictions}
+          state={state}
+          onClose={() => setSelectedMatchId(null)}
+        />
+      )}
+
       <section className="panel scoring-help">
         <Medal aria-hidden />
         <p>5 за точный счет, 4 за разницу, 3 за исход, 0 за промах.</p>
+      </section>
+    </div>
+  );
+}
+
+type MatchPredictionsDialogProps = {
+  match: Match;
+  matches: Match[];
+  participants: Participant[];
+  predictionMap: Map<string, Prediction>;
+  predictions: Prediction[];
+  state: PublicState;
+  onClose: () => void;
+};
+
+function MatchPredictionsDialog({
+  match,
+  matches,
+  participants,
+  predictionMap,
+  predictions,
+  state,
+  onClose
+}: MatchPredictionsDialogProps) {
+  const visible = isPredictionVisible(match, new Date(), matches);
+
+  return (
+    <div
+      className="match-dialog-backdrop"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section className="match-dialog" role="dialog" aria-modal="true" aria-labelledby="match-dialog-title">
+        <div className="match-dialog-header">
+          <div>
+            <p className="eyebrow">{formatDateTime(match.kickoffUtc)}</p>
+            <h2 id="match-dialog-title">
+              {match.home} - {match.away}
+            </h2>
+            <p>{match.groupOrRound}</p>
+          </div>
+          <button className="icon-button close-dialog" type="button" onClick={onClose} title="Закрыть">
+            <X size={20} aria-hidden />
+          </button>
+        </div>
+
+        <div className="match-dialog-score">
+          <span>Фактический счет</span>
+          <strong>{actualScore(match) ? `${match.actualHome}:${match.actualAway}` : "—"}</strong>
+        </div>
+
+        {!visible && (
+          <p className="dialog-note">
+            Прогнозы пока скрыты. Сейчас видно только, кто уже отправил прогноз на этот матч.
+          </p>
+        )}
+
+        <div className="dialog-predictions">
+          {participants.map((participant) => {
+            const prediction = predictionMap.get(`${participant.id}:${match.id}`);
+            const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
+            const points = getMatchScoreForParticipant(match, participant, predictions);
+
+            return (
+              <div className="dialog-prediction-row" key={participant.id}>
+                <span>{participant.displayName}</span>
+                {visible ? (
+                  prediction ? (
+                    <strong>
+                      {prediction.predHome}:{prediction.predAway}
+                      <span>{points}</span>
+                    </strong>
+                  ) : (
+                    <em>нет прогноза</em>
+                  )
+                ) : (
+                  <em className={submitted ? "submitted-mark yes" : "submitted-mark"}>
+                    {submitted ? "сдал" : "нет"}
+                  </em>
+                )}
+              </div>
+            );
+          })}
+          {!participants.length && <p>Пока нет участников.</p>}
+        </div>
       </section>
     </div>
   );
