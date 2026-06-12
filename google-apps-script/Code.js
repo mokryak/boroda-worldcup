@@ -13,6 +13,7 @@ const FINAL_SCORE_LOOKBACK_MS = 48 * 60 * 60 * 1000;
 const GROUP_STAGE_FINALIZE_AFTER_MS = 130 * 60 * 1000;
 const KNOCKOUT_STAGE_FINALIZE_AFTER_MS = 210 * 60 * 1000;
 const LIVE_SCORE_CACHE_SECONDS = 5 * 60;
+const LIVE_SCORE_CACHE_VERSION = "v2";
 const THESPORTSDB_EVENT_SEARCH_URL = "https://www.thesportsdb.com/api/v1/json/3/searchevents.php";
 
 const TEAM_ALIASES = {
@@ -412,7 +413,9 @@ function readCachedProviderFixtures_(cacheKey, cacheSeconds, fetcher) {
 
   try {
     const fixtures = fetcher();
-    cache.put(cacheKey, JSON.stringify(fixtures), cacheSeconds);
+    if (fixtures) {
+      cache.put(cacheKey, JSON.stringify(fixtures), cacheSeconds);
+    }
     return fixtures;
   } catch (error) {
     return [];
@@ -434,7 +437,7 @@ function getLiveScoreCandidates_(matches, now) {
 function fetchTheSportsDbFixtures_(matches) {
   return matches
     .map((match) =>
-      readCachedProviderFixtures_(`thesportsdb_${match.id}`, LIVE_SCORE_CACHE_SECONDS, () =>
+      readCachedProviderFixtures_(`${LIVE_SCORE_CACHE_VERSION}_thesportsdb_${match.id}`, LIVE_SCORE_CACHE_SECONDS, () =>
         fetchTheSportsDbEvent_(match)
       )
     )
