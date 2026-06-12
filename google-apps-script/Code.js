@@ -11,13 +11,7 @@ const LIVE_SCORE_WINDOW_BEFORE_MS = 15 * 60 * 1000;
 const LIVE_SCORE_WINDOW_AFTER_MS = 4 * 60 * 60 * 1000;
 const FINAL_SCORE_LOOKBACK_MS = 48 * 60 * 60 * 1000;
 const LIVE_SCORE_CACHE_SECONDS = 5 * 60;
-const FINAL_SCORE_CACHE_SECONDS = 60 * 60;
-const API_FOOTBALL_LIVESCORES_URL = "https://v3.football.api-sports.io/fixtures?live=all";
-const API_FOOTBALL_FIXTURES_URL = "https://v3.football.api-sports.io/fixtures";
 const THESPORTSDB_EVENT_SEARCH_URL = "https://www.thesportsdb.com/api/v1/json/3/searchevents.php";
-const SPORTMONKS_LIVESCORES_URL = "https://api.sportmonks.com/v3/football/livescores";
-const SPORTMONKS_FINAL_STATE_IDS = new Set([5, 8]);
-const API_FOOTBALL_FINAL_STATUSES = new Set(["FT", "AET", "PEN"]);
 
 const TEAM_ALIASES = {
   "bosnia and herzegovina": "bosnia herzegovina",
@@ -124,29 +118,12 @@ function refreshLiveScoresCron() {
   }
 }
 
-function authorizeApiFootball() {
-  const token = PropertiesService.getScriptProperties().getProperty("API_FOOTBALL_KEY");
-  if (!token) {
-    throw appError_("unknown", "API_FOOTBALL_KEY is missing in Script Properties");
-  }
-  UrlFetchApp.fetch(API_FOOTBALL_LIVESCORES_URL, {
-    muteHttpExceptions: true,
-    headers: {
-      Accept: "application/json",
-      "x-apisports-key": token
-    }
-  });
-}
-
 function getLiveScoreDebug_() {
   const matches = readMatches_();
   const candidates = getLiveScoreCandidates_(matches, new Date());
   const finalCandidates = getFinalScoreCandidates_(matches, new Date());
-  const properties = PropertiesService.getScriptProperties();
-  const token = properties.getProperty("API_FOOTBALL_KEY");
   const debug = {
     now: new Date().toISOString(),
-    tokenPresent: Boolean(token),
     candidates: candidates.map((match) => ({
       id: match.id,
       kickoffUtc: match.kickoffUtc,
@@ -165,10 +142,7 @@ function getLiveScoreDebug_() {
       actualHome: match.actualHome,
       actualAway: match.actualAway
     })),
-    apiFootball: null,
-    theSportsDb: [],
-    finalFixtures: [],
-    matches: []
+    theSportsDb: []
   };
 
   const sportsDbFixtures = fetchTheSportsDbFixtures_(uniqueMatchesById_(candidates.concat(finalCandidates)));
@@ -182,62 +156,6 @@ function getLiveScoreDebug_() {
       matchedMatchId: localMatch ? localMatch.id : null
     };
   });
-
-  if (!token || (!candidates.length && !finalCandidates.length)) {
-    return debug;
-  }
-
-  let result = { statusCode: null, results: null, errors: null, message: null, fixtures: [] };
-  try {
-    if (candidates.length) {
-      result = fetchApiFootballLivescoresWithMeta_(token);
-    }
-  } catch (error) {
-    debug.apiFootball = {
-      statusCode: null,
-      results: null,
-      errors: null,
-      message: error.message || String(error)
-    };
-    return debug;
-  }
-
-  debug.apiFootball = {
-    statusCode: result.statusCode,
-    results: result.results,
-    errors: result.errors,
-    message: result.message
-  };
-  debug.matches = result.fixtures.slice(0, 20).map((fixture) => {
-    const home = fixture.teams && fixture.teams.home && fixture.teams.home.name;
-    const away = fixture.teams && fixture.teams.away && fixture.teams.away.name;
-    const score = extractApiFootballScore_(fixture);
-    const status = apiFootballStatus_(fixture);
-    const localMatch = candidates.find((candidate) => findApiFootballFixture_(candidate, [fixture]));
-    return {
-      apiHome: home,
-      apiAway: away,
-      score,
-      status,
-      matchedMatchId: localMatch ? localMatch.id : null
-    };
-  });
-  if (finalCandidates.length) {
-    debug.finalFixtures = fetchApiFootballFinalFixtures_(token, finalCandidates).slice(0, 20).map((fixture) => {
-      const home = fixture.teams && fixture.teams.home && fixture.teams.home.name;
-      const away = fixture.teams && fixture.teams.away && fixture.teams.away.name;
-      const score = extractApiFootballScore_(fixture);
-      const status = apiFootballStatus_(fixture);
-      const localMatch = finalCandidates.find((candidate) => findApiFootballFixture_(candidate, [fixture]));
-      return {
-        apiHome: home,
-        apiAway: away,
-        score,
-        status,
-        matchedMatchId: localMatch ? localMatch.id : null
-      };
-    });
-  }
 
   return debug;
 }
@@ -421,62 +339,21 @@ function refreshLiveScores_(matches) {
     return { items: [], finalizedMatchIds: [] };
   }
 
-  const properties = PropertiesService.getScriptProperties();
-  const apiFootballToken = properties.getProperty("API_FOOTBALL_KEY");
-  const sportmonksToken = properties.getProperty("SPORTMONKS_API_TOKEN");
-  const fallbackProvider = properties.getProperty("LIVE_SCORE_FALLBACK_PROVIDER");
-
   const sportsDbFixtures = fetchTheSportsDbFixtures_(uniqueMatchesById_(candidates.concat(finalCandidates)));
-  const provider =
-    fallbackProvider === "api-football" && apiFootballToken
-      ? "api-football"
-      : fallbackProvider === "sportmonks" && sportmonksToken
-        ? "sportmonks"
-        : null;
-  const providerFixtures =
-    provider && candidates.length
-      ? readCachedProviderFixtures_(
-          `${provider}_live_scores`,
-          LIVE_SCORE_CACHE_SECONDS,
-          () => (apiFootballToken ? fetchApiFootballLivescores_(apiFootballToken) : fetchSportmonksLivescores_(sportmonksToken))
-        )
-      : [];
-  const finalFixtures =
-    apiFootballToken && finalCandidates.length
-      ? fetchApiFootballFinalFixtures_(apiFootballToken, finalCandidates)
-      : [];
-
   const liveItems = [];
   const finalized = [];
   candidates.forEach((match) => {
     const sportsDbFixture = findTheSportsDbFixture_(match, sportsDbFixtures);
-    const providerFixture =
-      provider === "api-football"
-        ? findApiFootballFixture_(match, providerFixtures)
-        : provider === "sportmonks"
-          ? findSportmonksFixture_(match, providerFixtures)
-          : null;
-    const fixture = sportsDbFixture || providerFixture;
-    if (!fixture) {
+    if (!sportsDbFixture) {
       return;
     }
 
-    const score =
-      fixture === sportsDbFixture
-        ? extractTheSportsDbScore_(fixture)
-        : provider === "api-football"
-        ? extractApiFootballScore_(fixture)
-        : extractSportmonksScore_(fixture, match);
+    const score = extractTheSportsDbScore_(sportsDbFixture);
     if (!score) {
       return;
     }
 
-    const status =
-      fixture === sportsDbFixture
-        ? theSportsDbStatus_(fixture)
-        : provider === "api-football"
-          ? apiFootballStatus_(fixture)
-          : sportmonksStatus_(fixture);
+    const status = theSportsDbStatus_(sportsDbFixture);
     liveItems.push({
       matchId: match.id,
       home: score.home,
@@ -484,7 +361,7 @@ function refreshLiveScores_(matches) {
       status: status.status,
       minute: status.minute,
       updatedAt: new Date().toISOString(),
-      provider: fixture === sportsDbFixture ? "thesportsdb" : provider
+      provider: "thesportsdb"
     });
 
     if (status.status === "complete") {
@@ -494,13 +371,11 @@ function refreshLiveScores_(matches) {
 
   finalCandidates.forEach((match) => {
     const sportsDbFixture = findTheSportsDbFixture_(match, sportsDbFixtures);
-    const apiFootballFixture = findApiFootballFixture_(match, finalFixtures);
-    const fixture = sportsDbFixture || apiFootballFixture;
-    if (!fixture) {
+    if (!sportsDbFixture) {
       return;
     }
-    const score = fixture === sportsDbFixture ? extractTheSportsDbScore_(fixture) : extractApiFootballScore_(fixture);
-    const status = fixture === sportsDbFixture ? theSportsDbStatus_(fixture) : apiFootballStatus_(fixture);
+    const score = extractTheSportsDbScore_(sportsDbFixture);
+    const status = theSportsDbStatus_(sportsDbFixture);
     if (!score || status.status !== "complete") {
       return;
     }
@@ -624,231 +499,6 @@ function getFinalScoreCandidates_(matches, now) {
     const kickoffMs = new Date(match.kickoffUtc).getTime();
     return nowMs >= kickoffMs + 90 * 60 * 1000 && nowMs <= kickoffMs + FINAL_SCORE_LOOKBACK_MS;
   });
-}
-
-function fetchApiFootballLivescores_(token) {
-  return fetchApiFootballLivescoresWithMeta_(token).fixtures;
-}
-
-function fetchApiFootballLivescoresWithMeta_(token) {
-  const response = UrlFetchApp.fetch(API_FOOTBALL_LIVESCORES_URL, {
-    muteHttpExceptions: true,
-    headers: {
-      Accept: "application/json",
-      "x-apisports-key": token
-    }
-  });
-
-  const statusCode = response.getResponseCode();
-  const payload = JSON.parse(response.getContentText());
-  return {
-    statusCode,
-    results: payload.results,
-    errors: payload.errors,
-    message: payload.message,
-    fixtures: statusCode >= 200 && statusCode < 300 && Array.isArray(payload.response) ? payload.response : []
-  };
-}
-
-function fetchApiFootballFinalFixtures_(token, candidates) {
-  const dates = Array.from(
-    new Set(candidates.map((match) => new Date(match.kickoffUtc).toISOString().slice(0, 10)))
-  );
-  return dates.flatMap((date) =>
-    readCachedProviderFixtures_(`api-football_fixtures_${date}`, FINAL_SCORE_CACHE_SECONDS, () =>
-      fetchApiFootballFixturesByDate_(token, date)
-    )
-  );
-}
-
-function fetchApiFootballFixturesByDate_(token, date) {
-  const response = UrlFetchApp.fetch(API_FOOTBALL_FIXTURES_URL + "?date=" + encodeURIComponent(date), {
-    muteHttpExceptions: true,
-    headers: {
-      Accept: "application/json",
-      "x-apisports-key": token
-    }
-  });
-
-  const statusCode = response.getResponseCode();
-  const payload = JSON.parse(response.getContentText());
-  return statusCode >= 200 && statusCode < 300 && Array.isArray(payload.response) ? payload.response : [];
-}
-
-function findApiFootballFixture_(match, fixtures) {
-  const expectedHome = canonicalTeam_(match.home);
-  const expectedAway = canonicalTeam_(match.away);
-
-  return fixtures.find((fixture) => {
-    const home = canonicalTeam_(fixture.teams && fixture.teams.home && fixture.teams.home.name);
-    const away = canonicalTeam_(fixture.teams && fixture.teams.away && fixture.teams.away.name);
-    return home === expectedHome && away === expectedAway;
-  });
-}
-
-function extractApiFootballScore_(fixture) {
-  const goals = fixture.goals || {};
-  if (typeof goals.home === "number" && typeof goals.away === "number") {
-    return { home: goals.home, away: goals.away };
-  }
-
-  const fulltime = fixture.score && fixture.score.fulltime;
-  if (fulltime && typeof fulltime.home === "number" && typeof fulltime.away === "number") {
-    return { home: fulltime.home, away: fulltime.away };
-  }
-
-  return null;
-}
-
-function apiFootballStatus_(fixture) {
-  const status = (fixture.fixture && fixture.fixture.status) || {};
-  const short = String(status.short || "").toUpperCase();
-  return {
-    status: API_FOOTBALL_FINAL_STATUSES.has(short) ? "complete" : "live",
-    minute: typeof status.elapsed === "number" ? status.elapsed : null
-  };
-}
-
-function fetchSportmonksLivescores_(token) {
-  const url =
-    SPORTMONKS_LIVESCORES_URL +
-    "?api_token=" +
-    encodeURIComponent(token) +
-    "&include=" +
-    encodeURIComponent("participants;scores;state;periods");
-  const response = UrlFetchApp.fetch(url, {
-    muteHttpExceptions: true,
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
-  const statusCode = response.getResponseCode();
-  if (statusCode < 200 || statusCode >= 300) {
-    return [];
-  }
-
-  const payload = JSON.parse(response.getContentText());
-  if (Array.isArray(payload.data)) {
-    return payload.data;
-  }
-  return payload.data ? [payload.data] : [];
-}
-
-function findSportmonksFixture_(match, fixtures) {
-  const expectedHome = canonicalTeam_(match.home);
-  const expectedAway = canonicalTeam_(match.away);
-
-  return fixtures.find((fixture) => {
-    const teams = extractSportmonksTeams_(fixture);
-    if (!teams.home || !teams.away) {
-      return false;
-    }
-    return canonicalTeam_(teams.home) === expectedHome && canonicalTeam_(teams.away) === expectedAway;
-  });
-}
-
-function extractSportmonksTeams_(fixture) {
-  const teams = { home: "", away: "" };
-  const participants = fixture.participants || [];
-  participants.forEach((participant) => {
-    const location = String((participant.meta && participant.meta.location) || participant.location || "").toLowerCase();
-    if (location === "home") {
-      teams.home = participant.name || participant.short_code || "";
-    }
-    if (location === "away") {
-      teams.away = participant.name || participant.short_code || "";
-    }
-  });
-
-  if ((!teams.home || !teams.away) && fixture.name) {
-    const parts = String(fixture.name).split(/\s+(?:vs|v)\s+/i);
-    if (parts.length === 2) {
-      teams.home = teams.home || parts[0];
-      teams.away = teams.away || parts[1];
-    }
-  }
-
-  return teams;
-}
-
-function extractSportmonksScore_(fixture, match) {
-  if (typeof fixture.home_score === "number" && typeof fixture.away_score === "number") {
-    return { home: fixture.home_score, away: fixture.away_score };
-  }
-  if (fixture.goals && typeof fixture.goals.home === "number" && typeof fixture.goals.away === "number") {
-    return { home: fixture.goals.home, away: fixture.goals.away };
-  }
-
-  const participants = fixture.participants || [];
-  const participantLocations = {};
-  participants.forEach((participant) => {
-    const location = String((participant.meta && participant.meta.location) || participant.location || "").toLowerCase();
-    if (location === "home" || location === "away") {
-      participantLocations[participant.id] = location;
-    }
-  });
-
-  const scores = fixture.scores || [];
-  const preferred = ["current", "2nd-half", "1st-half", "fulltime", "full-time", "ft"];
-  const best = {};
-  scores.forEach((item) => {
-    const description = String(item.description || (item.type && item.type.name) || item.type || "").toLowerCase();
-    const scoreObject = item.score || {};
-    const participantId = item.participant_id || scoreObject.participant_id || scoreObject.participant;
-    const location = participantLocations[participantId];
-    const goals = toNullableNumber_(scoreObject.goals ?? item.goals ?? scoreObject.score ?? item.score);
-    if (!location || goals === null || Number.isNaN(goals)) {
-      return;
-    }
-    const priority = Math.max(0, preferred.findIndex((label) => description.indexOf(label) !== -1) + 1);
-    const current = best[location];
-    if (!current || priority >= current.priority) {
-      best[location] = { goals, priority };
-    }
-  });
-
-  if (best.home && best.away) {
-    return { home: Number(best.home.goals), away: Number(best.away.goals) };
-  }
-
-  const resultInfoScore = String(fixture.result_info || "").match(/(\d+)\s*-\s*(\d+)/);
-  if (resultInfoScore) {
-    return { home: Number(resultInfoScore[1]), away: Number(resultInfoScore[2]) };
-  }
-
-  return null;
-}
-
-function sportmonksStatus_(fixture) {
-  const stateId = Number(fixture.state_id);
-  const stateName = String(
-    (fixture.state && (fixture.state.short_name || fixture.state.name || fixture.state.developer_name)) || ""
-  ).toLowerCase();
-  const complete =
-    SPORTMONKS_FINAL_STATE_IDS.has(stateId) ||
-    stateName.indexOf("finished") !== -1 ||
-    stateName.indexOf("full") !== -1 ||
-    stateName === "ft";
-  const minute = extractSportmonksMinute_(fixture);
-
-  return {
-    status: complete ? "complete" : "live",
-    minute
-  };
-}
-
-function extractSportmonksMinute_(fixture) {
-  if (typeof fixture.minute === "number") {
-    return fixture.minute;
-  }
-  const periods = fixture.periods || [];
-  const ticking = periods.find((period) => period.ticking);
-  const latest = ticking || periods[periods.length - 1];
-  if (latest && typeof latest.minutes === "number") {
-    return latest.minutes;
-  }
-  return null;
 }
 
 function writeFinalScores_(scores) {

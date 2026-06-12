@@ -529,20 +529,17 @@ input:disabled {
   width: 34px;
 }
 
-.rank.rank-1,
-.mini-rank.rank-1 {
+.rank.rank-1 {
   background: #d94848;
   color: #fff;
 }
 
-.rank.rank-2,
-.mini-rank.rank-2 {
+.rank.rank-2 {
   background: #e8892f;
   color: #fff;
 }
 
-.rank.rank-3,
-.mini-rank.rank-3 {
+.rank.rank-3 {
   background: #f0ca45;
   color: #172018;
 }
@@ -666,10 +663,21 @@ input:disabled {
 }
 
 .mini-rank {
-  background: #f1f2f0;
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 900;
+}
+
+.mini-rank.rank-1 {
+  color: #c93636;
+}
+
+.mini-rank.rank-2 {
+  color: #c86f1f;
+}
+
+.mini-rank.rank-3 {
+  color: #a78308;
 }
 
 .live-score {
