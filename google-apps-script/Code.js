@@ -9,8 +9,11 @@ const SHEETS = {
 const PREDICTION_LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
 const LIVE_SCORE_WINDOW_BEFORE_MS = 15 * 60 * 1000;
 const LIVE_SCORE_WINDOW_AFTER_MS = 4 * 60 * 60 * 1000;
+const FINAL_SCORE_LOOKBACK_MS = 48 * 60 * 60 * 1000;
 const LIVE_SCORE_CACHE_SECONDS = 45;
+const FINAL_SCORE_CACHE_SECONDS = 10 * 60;
 const API_FOOTBALL_LIVESCORES_URL = "https://v3.football.api-sports.io/fixtures?live=all";
+const API_FOOTBALL_FIXTURES_URL = "https://v3.football.api-sports.io/fixtures";
 const SPORTMONKS_LIVESCORES_URL = "https://api.sportmonks.com/v3/football/livescores";
 const SPORTMONKS_FINAL_STATE_IDS = new Set([5, 8]);
 const API_FOOTBALL_FINAL_STATUSES = new Set(["FT", "AET", "PEN"]);
@@ -137,6 +140,7 @@ function authorizeApiFootball() {
 function getLiveScoreDebug_() {
   const matches = readMatches_();
   const candidates = getLiveScoreCandidates_(matches, new Date());
+  const finalCandidates = getFinalScoreCandidates_(matches, new Date());
   const properties = PropertiesService.getScriptProperties();
   const token = properties.getProperty("API_FOOTBALL_KEY");
   const debug = {
@@ -151,17 +155,29 @@ function getLiveScoreDebug_() {
       actualHome: match.actualHome,
       actualAway: match.actualAway
     })),
+    finalCandidates: finalCandidates.map((match) => ({
+      id: match.id,
+      kickoffUtc: match.kickoffUtc,
+      home: match.home,
+      away: match.away,
+      status: match.status,
+      actualHome: match.actualHome,
+      actualAway: match.actualAway
+    })),
     apiFootball: null,
+    finalFixtures: [],
     matches: []
   };
 
-  if (!token || !candidates.length) {
+  if (!token || (!candidates.length && !finalCandidates.length)) {
     return debug;
   }
 
-  let result;
+  let result = { statusCode: null, results: null, errors: null, message: null, fixtures: [] };
   try {
-    result = fetchApiFootballLivescoresWithMeta_(token);
+    if (candidates.length) {
+      result = fetchApiFootballLivescoresWithMeta_(token);
+    }
   } catch (error) {
     debug.apiFootball = {
       statusCode: null,
@@ -192,6 +208,22 @@ function getLiveScoreDebug_() {
       matchedMatchId: localMatch ? localMatch.id : null
     };
   });
+  if (finalCandidates.length) {
+    debug.finalFixtures = fetchApiFootballFinalFixtures_(token, finalCandidates).slice(0, 20).map((fixture) => {
+      const home = fixture.teams && fixture.teams.home && fixture.teams.home.name;
+      const away = fixture.teams && fixture.teams.away && fixture.teams.away.name;
+      const score = extractApiFootballScore_(fixture);
+      const status = apiFootballStatus_(fixture);
+      const localMatch = finalCandidates.find((candidate) => findApiFootballFixture_(candidate, [fixture]));
+      return {
+        apiHome: home,
+        apiAway: away,
+        score,
+        status,
+        matchedMatchId: localMatch ? localMatch.id : null
+      };
+    });
+  }
 
   return debug;
 }
@@ -370,7 +402,8 @@ function savePredictions_(editToken, stageId, predictions) {
 
 function refreshLiveScores_(matches) {
   const candidates = getLiveScoreCandidates_(matches, new Date());
-  if (!candidates.length) {
+  const finalCandidates = getFinalScoreCandidates_(matches, new Date());
+  if (!candidates.length && !finalCandidates.length) {
     return { items: [], finalizedMatchIds: [] };
   }
 
@@ -381,22 +414,18 @@ function refreshLiveScores_(matches) {
     return { items: [], finalizedMatchIds: [] };
   }
 
-  const cache = CacheService.getScriptCache();
   const provider = apiFootballToken ? "api-football" : "sportmonks";
-  const cached = cache.get(`${provider}_live_scores`);
-  let providerFixtures;
-  if (cached) {
-    providerFixtures = JSON.parse(cached);
-  } else {
-    try {
-      providerFixtures = apiFootballToken
-        ? fetchApiFootballLivescores_(apiFootballToken)
-        : fetchSportmonksLivescores_(sportmonksToken);
-    } catch (error) {
-      return { items: [], finalizedMatchIds: [] };
-    }
-    cache.put(`${provider}_live_scores`, JSON.stringify(providerFixtures), LIVE_SCORE_CACHE_SECONDS);
-  }
+  const providerFixtures = candidates.length
+    ? readCachedProviderFixtures_(
+        `${provider}_live_scores`,
+        LIVE_SCORE_CACHE_SECONDS,
+        () => (apiFootballToken ? fetchApiFootballLivescores_(apiFootballToken) : fetchSportmonksLivescores_(sportmonksToken))
+      )
+    : [];
+  const finalFixtures =
+    apiFootballToken && finalCandidates.length
+      ? fetchApiFootballFinalFixtures_(apiFootballToken, finalCandidates)
+      : [];
 
   const liveItems = [];
   const finalized = [];
@@ -433,6 +462,21 @@ function refreshLiveScores_(matches) {
     }
   });
 
+  finalCandidates.forEach((match) => {
+    const fixture = findApiFootballFixture_(match, finalFixtures);
+    if (!fixture) {
+      return;
+    }
+    const score = extractApiFootballScore_(fixture);
+    const status = apiFootballStatus_(fixture);
+    if (!score || status.status !== "complete") {
+      return;
+    }
+    if (!finalized.some((item) => item.matchId === match.id)) {
+      finalized.push({ matchId: match.id, home: score.home, away: score.away });
+    }
+  });
+
   if (finalized.length) {
     writeFinalScores_(finalized);
   }
@@ -441,6 +485,22 @@ function refreshLiveScores_(matches) {
     items: liveItems,
     finalizedMatchIds: finalized.map((item) => item.matchId)
   };
+}
+
+function readCachedProviderFixtures_(cacheKey, cacheSeconds, fetcher) {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return JSON.parse(cached);
+  }
+
+  try {
+    const fixtures = fetcher();
+    cache.put(cacheKey, JSON.stringify(fixtures), cacheSeconds);
+    return fixtures;
+  } catch (error) {
+    return [];
+  }
 }
 
 function getLiveScoreCandidates_(matches, now) {
@@ -452,6 +512,18 @@ function getLiveScoreCandidates_(matches, now) {
 
     const kickoffMs = new Date(match.kickoffUtc).getTime();
     return nowMs >= kickoffMs - LIVE_SCORE_WINDOW_BEFORE_MS && nowMs <= kickoffMs + LIVE_SCORE_WINDOW_AFTER_MS;
+  });
+}
+
+function getFinalScoreCandidates_(matches, now) {
+  const nowMs = now.getTime();
+  return matches.filter((match) => {
+    if (match.status === "complete" && match.actualHome !== null && match.actualAway !== null) {
+      return false;
+    }
+
+    const kickoffMs = new Date(match.kickoffUtc).getTime();
+    return nowMs >= kickoffMs + 90 * 60 * 1000 && nowMs <= kickoffMs + FINAL_SCORE_LOOKBACK_MS;
   });
 }
 
@@ -477,6 +549,31 @@ function fetchApiFootballLivescoresWithMeta_(token) {
     message: payload.message,
     fixtures: statusCode >= 200 && statusCode < 300 && Array.isArray(payload.response) ? payload.response : []
   };
+}
+
+function fetchApiFootballFinalFixtures_(token, candidates) {
+  const dates = Array.from(
+    new Set(candidates.map((match) => new Date(match.kickoffUtc).toISOString().slice(0, 10)))
+  );
+  return dates.flatMap((date) =>
+    readCachedProviderFixtures_(`api-football_fixtures_${date}`, FINAL_SCORE_CACHE_SECONDS, () =>
+      fetchApiFootballFixturesByDate_(token, date)
+    )
+  );
+}
+
+function fetchApiFootballFixturesByDate_(token, date) {
+  const response = UrlFetchApp.fetch(API_FOOTBALL_FIXTURES_URL + "?date=" + encodeURIComponent(date), {
+    muteHttpExceptions: true,
+    headers: {
+      Accept: "application/json",
+      "x-apisports-key": token
+    }
+  });
+
+  const statusCode = response.getResponseCode();
+  const payload = JSON.parse(response.getContentText());
+  return statusCode >= 200 && statusCode < 300 && Array.isArray(payload.response) ? payload.response : [];
 }
 
 function findApiFootballFixture_(match, fixtures) {

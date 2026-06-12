@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getLeaderboard, getMatchScoreForParticipant, getOpenStage } from "./selectors";
+import {
+  getLeaderboard,
+  getMatchScoreForParticipant,
+  getOpenStage,
+  getStandingsAfterMatch
+} from "./selectors";
 import type { PublicState } from "./types";
 
 const state: PublicState = {
@@ -97,5 +102,12 @@ describe("getLeaderboard", () => {
         updatedAt: "2026-06-11T20:03:00.000Z"
       })
     ).toBe(5);
+  });
+
+  it("computes total and rank after a selected match", () => {
+    const standings = getStandingsAfterMatch(state, state.matches[0], new Map(), new Date("2026-06-11T19:00:00.000Z"));
+
+    expect(standings.get("p1")).toEqual({ matchPoints: 5, total: 5, rank: 1 });
+    expect(standings.get("p2")).toEqual({ matchPoints: 4, total: 4, rank: 2 });
   });
 });

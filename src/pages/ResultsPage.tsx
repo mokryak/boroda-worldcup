@@ -11,6 +11,7 @@ import {
   getMatchesForStage,
   getParticipantMatchSubmission,
   getPredictionMap,
+  getStandingsAfterMatch,
   matchScore,
   sortStages
 } from "../domain/selectors";
@@ -46,8 +47,8 @@ export function ResultsPage({ state }: { state: PublicState }) {
         </div>
         <div className="leaderboard">
           {leaderboard.map((row, index) => (
-            <article className="leaderboard-row" key={row.participant.id}>
-              <span className="rank">{index + 1}</span>
+            <article className={`leaderboard-row ${rankClass(index + 1)}`} key={row.participant.id}>
+              <span className={`rank ${rankClass(index + 1)}`}>{index + 1}</span>
               <span>{row.participant.displayName}</span>
               <strong>{row.total}</strong>
             </article>
@@ -82,6 +83,9 @@ export function ResultsPage({ state }: { state: PublicState }) {
             <tbody>
               {matches.map((match) => {
                 const visible = isPredictionVisible(match, new Date(), matches);
+                const liveScore = liveScoreMap.get(match.id);
+                const score = matchScore(match, liveScore);
+                const standings = getStandingsAfterMatch(state, match, liveScoreMap);
                 return (
                   <tr
                     className="results-match-row"
@@ -106,24 +110,35 @@ export function ResultsPage({ state }: { state: PublicState }) {
                         {match.home} - {match.away}
                       </button>
                     </th>
-                    <td>{actualScore(match) ? `${match.actualHome}:${match.actualAway}` : "—"}</td>
+                    <td>
+                      {liveScore?.status === "live" ? (
+                        <span className="live-score">LIVE {liveScore.minute ? `${liveScore.minute}' ` : ""}{liveScore.home}:{liveScore.away}</span>
+                      ) : score ? (
+                        `${score.home}:${score.away}`
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     {state.participants.map((participant) => {
                       const prediction = predictionMap.get(`${participant.id}:${match.id}`);
                       const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
-                      const points = getMatchScoreForParticipant(
-                        match,
-                        participant,
-                        state.predictions,
-                        liveScoreMap.get(match.id)
-                      );
+                      const standing = standings.get(participant.id);
 
                       return (
                         <td key={participant.id}>
                           {visible ? (
                             prediction ? (
                               <span className="prediction-cell">
-                                {prediction.predHome}:{prediction.predAway}
-                                <strong>{points}</strong>
+                                <span>{prediction.predHome}:{prediction.predAway}</span>
+                                {score && standing ? (
+                                  <span className="cell-stats">
+                                    <strong className={`points-badge ${pointsClass(standing.matchPoints)}`}>
+                                      {standing.matchPoints}
+                                    </strong>
+                                    <span>{standing.total}</span>
+                                    <span className={`mini-rank ${rankClass(standing.rank)}`}>#{standing.rank}</span>
+                                  </span>
+                                ) : null}
                               </span>
                             ) : (
                               "—"
@@ -153,6 +168,7 @@ export function ResultsPage({ state }: { state: PublicState }) {
           predictions={state.predictions}
           state={state}
           liveScore={liveScoreMap.get(selectedMatch.id)}
+          liveScoreMap={liveScoreMap}
           onClose={() => setSelectedMatchId(null)}
         />
       )}
@@ -173,6 +189,7 @@ type MatchPredictionsDialogProps = {
   predictions: Prediction[];
   state: PublicState;
   liveScore?: LiveScore;
+  liveScoreMap: Map<string, LiveScore>;
   onClose: () => void;
 };
 
@@ -184,10 +201,12 @@ function MatchPredictionsDialog({
   predictions,
   state,
   liveScore,
+  liveScoreMap,
   onClose
 }: MatchPredictionsDialogProps) {
   const visible = isPredictionVisible(match, new Date(), matches);
   const score = matchScore(match, liveScore);
+  const standings = getStandingsAfterMatch(state, match, liveScoreMap);
 
   return (
     <div
@@ -230,12 +249,15 @@ function MatchPredictionsDialog({
           <div className="dialog-prediction-head" aria-hidden>
             <span>Участник</span>
             <span>{visible ? "Прогноз" : "Статус"}</span>
-            {visible && <span>Очки</span>}
+            {visible && <span>Матч</span>}
+            {visible && <span>Всего</span>}
+            {visible && <span>Место</span>}
           </div>
           {participants.map((participant) => {
             const prediction = predictionMap.get(`${participant.id}:${match.id}`);
             const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
             const points = getMatchScoreForParticipant(match, participant, predictions, liveScore);
+            const standing = standings.get(participant.id);
 
             return (
               <div className="dialog-prediction-row" key={participant.id}>
@@ -244,10 +266,24 @@ function MatchPredictionsDialog({
                   prediction ? (
                     <>
                       <strong>{prediction.predHome}:{prediction.predAway}</strong>
-                      <strong className="dialog-points">{points}</strong>
+                      {score && standing ? (
+                        <>
+                          <strong className={`points-badge dialog-points ${pointsClass(points)}`}>{points}</strong>
+                          <strong>{standing.total}</strong>
+                          <strong className={`mini-rank ${rankClass(standing.rank)}`}>#{standing.rank}</strong>
+                        </>
+                      ) : (
+                        <>
+                          <em>—</em>
+                          <em>—</em>
+                          <em>—</em>
+                        </>
+                      )}
                     </>
                   ) : (
                     <>
+                      <em>—</em>
+                      <em>—</em>
                       <em>—</em>
                       <em>—</em>
                     </>
@@ -265,4 +301,30 @@ function MatchPredictionsDialog({
       </section>
     </div>
   );
+}
+
+function pointsClass(points: number) {
+  if (points === 5) {
+    return "points-5";
+  }
+  if (points === 4) {
+    return "points-4";
+  }
+  if (points === 3) {
+    return "points-3";
+  }
+  return "points-0";
+}
+
+function rankClass(rank: number) {
+  if (rank === 1) {
+    return "rank-1";
+  }
+  if (rank === 2) {
+    return "rank-2";
+  }
+  if (rank === 3) {
+    return "rank-3";
+  }
+  return "";
 }

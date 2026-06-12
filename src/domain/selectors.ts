@@ -83,6 +83,59 @@ export function getLeaderboard(state: PublicState, now = new Date()) {
     .sort((a, b) => b.total - a.total || a.participant.displayName.localeCompare(b.participant.displayName));
 }
 
+export function getStandingsAfterMatch(
+  state: PublicState,
+  targetMatch: Match,
+  liveScoreMap = getLiveScoreMap(state.liveScores),
+  now = new Date()
+): Map<string, { matchPoints: number; total: number; rank: number }> {
+  const totals = new Map<string, { matchPoints: number; total: number; rank: number }>();
+  const predictionMap = getPredictionMap(state.predictions);
+  const sortedMatches = sortMatchesChronologically(state.matches);
+  const targetIndex = sortedMatches.findIndex((match) => match.id === targetMatch.id);
+  const matchesToScore = targetIndex >= 0 ? sortedMatches.slice(0, targetIndex + 1) : [targetMatch];
+
+  state.participants.forEach((participant) => {
+    let total = 0;
+    let targetPoints = 0;
+
+    matchesToScore.forEach((match) => {
+      if (!isPredictionVisible(match, now, state.matches)) {
+        return;
+      }
+
+      const prediction = predictionMap.get(`${participant.id}:${match.id}`);
+      const points = scorePrediction(
+        matchScore(match, liveScoreMap.get(match.id)),
+        prediction ? { home: prediction.predHome, away: prediction.predAway } : null
+      );
+      total += points;
+      if (match.id === targetMatch.id) {
+        targetPoints = points;
+      }
+    });
+
+    totals.set(participant.id, { matchPoints: targetPoints, total, rank: 0 });
+  });
+
+  const sortedTotals = [...totals.entries()].sort(
+    (left, right) =>
+      right[1].total - left[1].total ||
+      participantName(state, left[0]).localeCompare(participantName(state, right[0]))
+  );
+  let lastTotal: number | null = null;
+  let lastRank = 0;
+  sortedTotals.forEach(([participantId, row], index) => {
+    if (lastTotal === null || row.total !== lastTotal) {
+      lastRank = index + 1;
+      lastTotal = row.total;
+    }
+    totals.set(participantId, { ...row, rank: lastRank });
+  });
+
+  return totals;
+}
+
 export function getEditableMatchesForStage(state: PublicState, stageId: StageId, now = new Date()): Match[] {
   const matches = getMatchesForStage(state, stageId);
   return matches.filter((match) => canEditMatch(match, now, matches));
@@ -120,4 +173,18 @@ export function matchScore(match: Match, liveScore?: LiveScore) {
     return { home: liveScore.home, away: liveScore.away };
   }
   return actualScore(match);
+}
+
+function participantName(state: PublicState, participantId: string) {
+  return state.participants.find((participant) => participant.id === participantId)?.displayName ?? "";
+}
+
+function sortMatchesChronologically(matches: Match[]): Match[] {
+  return [...matches].sort((a, b) => {
+    const byKickoff = new Date(a.kickoffUtc).getTime() - new Date(b.kickoffUtc).getTime();
+    if (byKickoff !== 0) {
+      return byKickoff;
+    }
+    return a.displayOrder - b.displayOrder;
+  });
 }

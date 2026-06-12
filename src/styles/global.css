@@ -503,6 +503,21 @@ input:disabled {
   padding: 12px;
 }
 
+.leaderboard-row.rank-1 {
+  background: #fff0f0;
+  border-color: #efb4b4;
+}
+
+.leaderboard-row.rank-2 {
+  background: #fff4e8;
+  border-color: #edc28f;
+}
+
+.leaderboard-row.rank-3 {
+  background: #fff9dc;
+  border-color: #ead982;
+}
+
 .rank {
   background: #f4f0e6;
   border-radius: 7px;
@@ -512,6 +527,24 @@ input:disabled {
   height: 34px;
   place-items: center;
   width: 34px;
+}
+
+.rank.rank-1,
+.mini-rank.rank-1 {
+  background: #d94848;
+  color: #fff;
+}
+
+.rank.rank-2,
+.mini-rank.rank-2 {
+  background: #e8892f;
+  color: #fff;
+}
+
+.rank.rank-3,
+.mini-rank.rank-3 {
+  background: #f0ca45;
+  color: #172018;
 }
 
 .matrix-scroll {
@@ -582,19 +615,67 @@ input:disabled {
 }
 
 .prediction-cell {
-  align-items: center;
-  display: inline-flex;
-  gap: 8px;
+  display: inline-grid;
+  gap: 4px;
 }
 
-.prediction-cell strong {
-  background: #e6f1ec;
+.cell-stats {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.cell-stats > span:not(.mini-rank) {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.points-badge,
+.mini-rank {
   border-radius: 6px;
-  color: var(--accent-strong);
   display: grid;
-  min-height: 26px;
-  min-width: 26px;
+  min-height: 24px;
+  min-width: 28px;
   place-items: center;
+}
+
+.points-badge {
+  background: #edf0ec;
+  color: var(--muted);
+}
+
+.points-badge.points-5 {
+  background: #008f5a;
+  color: #fff;
+}
+
+.points-badge.points-4 {
+  background: #55bf84;
+  color: #083b28;
+}
+
+.points-badge.points-3 {
+  background: #b8e3c5;
+  color: #16462a;
+}
+
+.points-badge.points-0 {
+  background: #eef1ee;
+  color: var(--muted);
+}
+
+.mini-rank {
+  background: #f1f2f0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.live-score {
+  color: var(--rose);
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 .submitted-mark {
@@ -695,7 +776,7 @@ input:disabled {
 .dialog-prediction-row {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1fr) minmax(54px, auto) minmax(34px, auto);
+  grid-template-columns: minmax(0, 1fr) 56px 38px 42px 44px;
 }
 
 .dialog-prediction-head {
@@ -724,13 +805,7 @@ input:disabled {
 }
 
 .dialog-points {
-  background: #e6f1ec;
-  border-radius: 6px;
-  color: var(--accent-strong);
-  display: grid;
-  min-height: 24px;
-  min-width: 28px;
-  place-items: center;
+  font-size: 0.92rem;
 }
 
 .dialog-prediction-row em {
@@ -847,7 +922,8 @@ input:disabled {
 
   .dialog-prediction-head,
   .dialog-prediction-row {
-    grid-template-columns: minmax(0, 1fr) 58px 32px;
+    gap: 5px;
+    grid-template-columns: minmax(0, 1fr) 48px 30px 34px 38px;
   }
 
   .dialog-prediction-row {
