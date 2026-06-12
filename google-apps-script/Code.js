@@ -424,9 +424,15 @@ function refreshLiveScores_(matches) {
   const properties = PropertiesService.getScriptProperties();
   const apiFootballToken = properties.getProperty("API_FOOTBALL_KEY");
   const sportmonksToken = properties.getProperty("SPORTMONKS_API_TOKEN");
+  const fallbackProvider = properties.getProperty("LIVE_SCORE_FALLBACK_PROVIDER");
 
   const sportsDbFixtures = fetchTheSportsDbFixtures_(uniqueMatchesById_(candidates.concat(finalCandidates)));
-  const provider = apiFootballToken ? "api-football" : sportmonksToken ? "sportmonks" : null;
+  const provider =
+    fallbackProvider === "api-football" && apiFootballToken
+      ? "api-football"
+      : fallbackProvider === "sportmonks" && sportmonksToken
+        ? "sportmonks"
+        : null;
   const providerFixtures =
     provider && candidates.length
       ? readCachedProviderFixtures_(
