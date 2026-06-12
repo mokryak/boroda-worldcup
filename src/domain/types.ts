@@ -9,6 +9,7 @@ export type StageId =
   | "finals";
 
 export type MatchStatus = "scheduled" | "complete";
+export type MatchSide = "home" | "away";
 
 export type Stage = {
   id: StageId;
@@ -26,6 +27,7 @@ export type Match = {
   away: string;
   actualHome: number | null;
   actualAway: number | null;
+  actualWinner?: MatchSide | null;
   status: MatchStatus;
   displayOrder: number;
 };
@@ -41,6 +43,7 @@ export type Prediction = {
   matchId: string;
   predHome: number;
   predAway: number;
+  predictedWinner?: MatchSide | null;
   updatedAt: string;
 };
 
@@ -81,6 +84,7 @@ export type SavePredictionInput = {
   matchId: string;
   predHome: number;
   predAway: number;
+  predictedWinner?: MatchSide | null;
 };
 
 export type RegisterResponse = {

@@ -73,7 +73,8 @@ export function getLeaderboard(state: PublicState, now = new Date()) {
           sum +
           scorePrediction(
             actualScore(match),
-            prediction ? { home: prediction.predHome, away: prediction.predAway } : null
+            predictionScore(prediction),
+            { includeAdvanceBonus: isKnockoutMatch(match) }
           )
         );
       }, 0);
@@ -107,7 +108,8 @@ export function getStandingsAfterMatch(
       const prediction = predictionMap.get(`${participant.id}:${match.id}`);
       const points = scorePrediction(
         matchScore(match, liveScoreMap.get(match.id)),
-        prediction ? { home: prediction.predHome, away: prediction.predAway } : null
+        predictionScore(prediction),
+        { includeAdvanceBonus: isKnockoutMatch(match) }
       );
       total += points;
       if (match.id === targetMatch.id) {
@@ -153,7 +155,8 @@ export function getMatchScoreForParticipant(
 
   return scorePrediction(
     matchScore(match, liveScore),
-    prediction ? { home: prediction.predHome, away: prediction.predAway } : null
+    predictionScore(prediction),
+    { includeAdvanceBonus: isKnockoutMatch(match) }
   );
 }
 
@@ -161,7 +164,7 @@ export function actualScore(match: Match) {
   if (match.actualHome === null || match.actualAway === null) {
     return null;
   }
-  return { home: match.actualHome, away: match.actualAway };
+  return { home: match.actualHome, away: match.actualAway, winner: match.actualWinner ?? null };
 }
 
 export function getLiveScoreMap(liveScores: LiveScore[] = []): Map<string, LiveScore> {
@@ -177,6 +180,21 @@ export function matchScore(match: Match, liveScore?: LiveScore) {
 
 function participantName(state: PublicState, participantId: string) {
   return state.participants.find((participant) => participant.id === participantId)?.displayName ?? "";
+}
+
+export function isKnockoutMatch(match: Pick<Match, "stageId">): boolean {
+  return !match.stageId.startsWith("group-");
+}
+
+export function predictionScore(prediction: Prediction | undefined) {
+  if (!prediction) {
+    return null;
+  }
+  return {
+    home: prediction.predHome,
+    away: prediction.predAway,
+    winner: prediction.predictedWinner ?? null
+  };
 }
 
 function sortMatchesChronologically(matches: Match[]): Match[] {

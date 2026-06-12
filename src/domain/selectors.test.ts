@@ -28,6 +28,7 @@ const state: PublicState = {
       away: "South Africa",
       actualHome: 2,
       actualAway: 1,
+      actualWinner: null,
       status: "complete",
       displayOrder: 1
     }
@@ -109,5 +110,23 @@ describe("getLeaderboard", () => {
 
     expect(standings.get("p1")).toEqual({ matchPoints: 5, total: 5, rank: 1 });
     expect(standings.get("p2")).toEqual({ matchPoints: 4, total: 4, rank: 2 });
+  });
+
+  it("includes advancement points for knockout matches", () => {
+    const knockoutState: PublicState = {
+      ...state,
+      stages: [{ id: "r32", title: "1/16 финала", deadlineUtc: "2026-07-01T00:00:00.000Z", displayOrder: 4 }],
+      matches: [{ ...state.matches[0], stageId: "r32", actualHome: 1, actualAway: 1, actualWinner: "away" }],
+      predictions: [
+        { ...state.predictions[0], predHome: 2, predAway: 2, predictedWinner: "away" },
+        { ...state.predictions[1], predHome: 1, predAway: 2 }
+      ],
+      submittedStages: [{ stageId: "r32", participantIds: ["p1", "p2"] }]
+    };
+
+    expect(getLeaderboard(knockoutState, new Date("2026-06-11T19:00:00.000Z")).map((row) => row.total)).toEqual([
+      7,
+      3
+    ]);
   });
 });

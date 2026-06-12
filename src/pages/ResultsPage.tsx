@@ -1,16 +1,16 @@
-import { Medal, Trophy, X } from "lucide-react";
+import { BookOpen, Medal, Trophy, X } from "lucide-react";
 import { useState } from "react";
 import { StageTabs } from "../components/StageTabs";
 import { StatusPill } from "../components/StatusPill";
 import { formatDateTime, formatLocalTimeZoneLabel } from "../components/format";
 import {
-  actualScore,
   getLeaderboard,
   getLiveScoreMap,
   getMatchScoreForParticipant,
   getMatchesForStage,
   getParticipantMatchSubmission,
   getPredictionMap,
+  isKnockoutMatch,
   getStandingsAfterMatch,
   matchScore,
   sortStages
@@ -22,6 +22,7 @@ export function ResultsPage({ state }: { state: PublicState }) {
   const stages = sortStages(state.stages);
   const [activeStageId, setActiveStageId] = useState<StageId>(stages[0].id);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const activeStage = stages.find((stage) => stage.id === activeStageId)!;
   const matches = getMatchesForStage(state, activeStageId);
   const selectedMatch = selectedMatchId ? matches.find((match) => match.id === selectedMatchId) : undefined;
@@ -43,7 +44,13 @@ export function ResultsPage({ state }: { state: PublicState }) {
             <p className="eyebrow">Рейтинг</p>
             <h2>Общая таблица</h2>
           </div>
-          <Trophy size={28} aria-hidden />
+          <div className="heading-actions">
+            <button className="secondary-action" type="button" onClick={() => setRulesOpen(true)}>
+              <BookOpen size={18} aria-hidden />
+              Правила
+            </button>
+            <Trophy size={28} aria-hidden />
+          </div>
         </div>
         <div className="leaderboard">
           {leaderboard.map((row, index) => (
@@ -130,6 +137,9 @@ export function ResultsPage({ state }: { state: PublicState }) {
                             prediction ? (
                               <span className="prediction-cell">
                                 <span>{prediction.predHome}:{prediction.predAway}</span>
+                                {prediction.predictedWinner && matchScoreDraw(prediction) ? (
+                                  <small>проходит {teamBySide(match, prediction.predictedWinner)}</small>
+                                ) : null}
                                 {score && standing ? (
                                   <span className="cell-stats">
                                     <strong className={`points-badge ${pointsClass(standing.matchPoints)}`}>
@@ -173,9 +183,11 @@ export function ResultsPage({ state }: { state: PublicState }) {
         />
       )}
 
+      {rulesOpen && <RulesDialog onClose={() => setRulesOpen(false)} />}
+
       <section className="panel scoring-help">
         <Medal aria-hidden />
-        <p>5 за точный счет, 4 за разницу, 3 за исход, 0 за промах.</p>
+        <p>5 за точный счет, 4 за разницу, 3 за исход. В плей-офф еще +3 за угаданного прошедшего.</p>
       </section>
     </div>
   );
@@ -235,7 +247,7 @@ function MatchPredictionsDialog({
           <span>{match.groupOrRound}</span>
           <span>
             {liveScore?.status === "live" ? `LIVE${liveScore.minute ? ` ${liveScore.minute}'` : ""}` : "Счет"}:{" "}
-            <strong>{score ? `${score.home}:${score.away}` : "—"}</strong>
+            <strong>{score ? formatMatchScore(match, score) : "—"}</strong>
           </span>
         </div>
 
@@ -265,7 +277,12 @@ function MatchPredictionsDialog({
                 {visible ? (
                   prediction ? (
                     <>
-                      <strong>{prediction.predHome}:{prediction.predAway}</strong>
+                      <strong>
+                        {prediction.predHome}:{prediction.predAway}
+                        {prediction.predictedWinner && matchScoreDraw(prediction)
+                          ? `, проходит ${teamBySide(match, prediction.predictedWinner)}`
+                          : ""}
+                      </strong>
                       {score && standing ? (
                         <>
                           <strong className={`points-badge dialog-points ${pointsClass(points)}`}>{points}</strong>
@@ -304,6 +321,15 @@ function MatchPredictionsDialog({
 }
 
 function pointsClass(points: number) {
+  if (points >= 8) {
+    return "points-8";
+  }
+  if (points === 7) {
+    return "points-7";
+  }
+  if (points === 6) {
+    return "points-6";
+  }
   if (points === 5) {
     return "points-5";
   }
@@ -327,4 +353,63 @@ function rankClass(rank: number) {
     return "rank-3";
   }
   return "";
+}
+
+function RulesDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="match-dialog-backdrop"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section className="match-dialog rules-dialog" role="dialog" aria-modal="true" aria-labelledby="rules-dialog-title">
+        <div className="match-dialog-header">
+          <div>
+            <h2 id="rules-dialog-title">Правила турнира</h2>
+            <p>Как начисляются очки за прогнозы</p>
+          </div>
+          <button className="icon-button close-dialog" type="button" onClick={onClose} title="Закрыть">
+            <X size={20} aria-hidden />
+          </button>
+        </div>
+
+        <div className="rules-content">
+          <h3>1. Счета матчей</h3>
+          <p>В турнире прогнозируются счета матчей и за правильно угаданый счет начисляются очки. Возможный 3 варианта получения очков:</p>
+          <p><strong>а) 5 очков</strong> - Угадан точный счет матча. Пример: прогноз был 3-1, реальный счет матча 3-1.</p>
+          <p><strong>б) 4 очка</strong> - Угадан исход матча. Пример 1: прогноз - 1-0, реальный счет - 2-1. Пример 2: прогноз - 1-1, реальный счет 0-0.</p>
+          <p><strong>в) 3 очка</strong> - Угадан исход матча. Пример: прогноз был 3-1, реальный счет матча 2-1.</p>
+
+          <h3>2. Итоговый счет</h3>
+          <p>На групповом турнире фиксируется счет после окончания матча. На этапе плей-офф счет фиксируется после основного или дополнительного времени, если таковое было назначено.</p>
+          <p>Пример 1: основное время матча закончилось со счетом 1-1, после дополнительного времени счет 2-1. Реальный итоговый счет, котроый идет в зачет 2-1.</p>
+          <p>Пример 2: основное время закончилось 1-1, дополнительное закончилось 2-2. Итоговый счет 2-2.</p>
+
+          <h3>3. Проход в плей-офф</h3>
+          <p>Дополнительные очки на этапе плей-офф за проход. За угаданного участника прошедшего в следующий этап 3 очка. Нельзя поставить по счету одного победителя, а на проход поставить на другого. На проход ставится только если прогноз основного и дополнительного времени ничья.</p>
+          <p>Пример: Аргентина - Англия 3-1. Прогноз 3-1 дает 8 очков, 2-0 дает 7 очков, 1-0 дает 6 очков, 1-1 и проходит Аргентина дает 3 очка.</p>
+          <p>Пример: Бразилия - Италия 1-1, по пенальти выиграла Италия. Прогноз 1-1 и проходит Бразилия дает 5 очков, 2-2 и проходит Италия дает 7 очков, 1-2 дает 3 очка.</p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function matchScoreDraw(score: Pick<Prediction, "predHome" | "predAway">): boolean {
+  return score.predHome === score.predAway;
+}
+
+function teamBySide(match: Match, side: "home" | "away"): string {
+  return side === "home" ? match.home : match.away;
+}
+
+function formatMatchScore(match: Match, score: { home: number; away: number }): string {
+  if (isKnockoutMatch(match) && score.home === score.away && match.actualWinner) {
+    return `${score.home}:${score.away}, проходит ${teamBySide(match, match.actualWinner)}`;
+  }
+  return `${score.home}:${score.away}`;
 }

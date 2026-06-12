@@ -2,6 +2,8 @@ import { demoState } from "../data/seed";
 import { canEditMatch, isPredictionVisible } from "../domain/visibility";
 import type {
   ApiErrorCode,
+  Match,
+  MatchSide,
   PublicState,
   RegisterResponse,
   SavePredictionInput,
@@ -115,6 +117,9 @@ function createMockClient(): ApiClient {
         if (!canEditMatch(match, new Date(), stageMatches)) {
           throw new ApiError("deadline_passed", "Прогноз на этот матч уже закрыт.");
         }
+        if (!isValidPredictionWinner(match, prediction)) {
+          throw new ApiError("unknown", "Для ничьей в плей-офф выберите, кто проходит.");
+        }
       });
 
       const now = new Date().toISOString();
@@ -128,6 +133,7 @@ function createMockClient(): ApiClient {
           matchId: prediction.matchId,
           predHome: prediction.predHome,
           predAway: prediction.predAway,
+          predictedWinner: normalizedPredictionWinner(stageMatchMap.get(prediction.matchId)!, prediction),
           updatedAt: now
         }))
       );
@@ -193,6 +199,11 @@ function migrateMockDb(db: MockDb): MockDb {
     submittedStages: db.submittedStages ?? [],
     submittedMatches: db.submittedMatches ?? [],
     liveScores: db.liveScores ?? [],
+    matches: db.matches.map((match) => ({ ...match, actualWinner: match.actualWinner ?? null })),
+    predictions: db.predictions.map((prediction) => ({
+      ...prediction,
+      predictedWinner: prediction.predictedWinner ?? null
+    })),
     tokens: db.tokens ?? {}
   };
 }
@@ -247,3 +258,29 @@ const apiErrorMessages: Record<ApiErrorCode, string> = {
   not_found: "Данные не найдены.",
   unknown: "Что-то пошло не так."
 };
+
+function isValidPredictionWinner(match: Match, prediction: SavePredictionInput): boolean {
+  if (match.stageId.startsWith("group-")) {
+    return true;
+  }
+  if (prediction.predHome !== prediction.predAway) {
+    return true;
+  }
+  return prediction.predictedWinner === "home" || prediction.predictedWinner === "away";
+}
+
+function normalizedPredictionWinner(
+  match: Match,
+  prediction: SavePredictionInput
+): MatchSide | null {
+  if (match.stageId.startsWith("group-")) {
+    return null;
+  }
+  if (prediction.predHome > prediction.predAway) {
+    return "home";
+  }
+  if (prediction.predAway > prediction.predHome) {
+    return "away";
+  }
+  return prediction.predictedWinner ?? null;
+}

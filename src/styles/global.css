@@ -253,6 +253,14 @@ input:disabled {
   justify-content: space-between;
 }
 
+.heading-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .current-stage .section-heading svg,
 .leaderboard + svg {
   color: var(--accent);
@@ -454,6 +462,38 @@ input:disabled {
   opacity: 1;
 }
 
+.advance-picker {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.advance-picker > span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.advance-option {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  font-weight: 800;
+  min-height: 38px;
+  overflow-wrap: anywhere;
+  padding: 6px 10px;
+  text-align: center;
+}
+
+.advance-option.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+
 .notice {
   align-items: center;
   background: #f4f7f2;
@@ -616,6 +656,12 @@ input:disabled {
   gap: 4px;
 }
 
+.prediction-cell small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
 .cell-stats {
   align-items: center;
   display: inline-flex;
@@ -644,6 +690,13 @@ input:disabled {
 
 .points-badge.points-5 {
   background: #008f5a;
+  color: #fff;
+}
+
+.points-badge.points-8,
+.points-badge.points-7,
+.points-badge.points-6 {
+  background: var(--accent-strong);
   color: #fff;
 }
 
@@ -784,7 +837,7 @@ input:disabled {
 .dialog-prediction-row {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1fr) 56px 38px 42px 44px;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, auto) 38px 42px 44px;
 }
 
 .dialog-prediction-head {
@@ -828,6 +881,32 @@ input:disabled {
 
 .scoring-help svg {
   color: var(--gold);
+}
+
+.rules-dialog {
+  max-width: 680px;
+  width: min(100%, 680px);
+}
+
+.rules-content {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.rules-content h3 {
+  font-size: 1rem;
+  margin: 10px 0 0;
+}
+
+.rules-content p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.rules-content strong {
+  color: var(--ink);
 }
 
 .empty-state,
@@ -894,6 +973,10 @@ input:disabled {
 
   .score-inputs {
     grid-template-columns: minmax(82px, 1fr) auto minmax(82px, 1fr);
+  }
+
+  .advance-picker {
+    grid-template-columns: 1fr;
   }
 
   .sticky-submit {

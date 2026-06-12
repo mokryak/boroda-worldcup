@@ -86,6 +86,7 @@ function setupWorldCupPredictor() {
     "away",
     "actual_home",
     "actual_away",
+    "actual_winner",
     "status",
     "display_order"
   ]);
@@ -100,8 +101,10 @@ function setupWorldCupPredictor() {
     "match_id",
     "pred_home",
     "pred_away",
+    "predicted_winner",
     "updated_at"
   ]);
+  ensureRuntimeColumns_();
 }
 
 function installLiveScoreTrigger() {
@@ -170,6 +173,7 @@ function getLiveScoreDebug_() {
 }
 
 function getPublicState_(editToken) {
+  ensureRuntimeColumns_();
   const settings = getSettings_();
   const stages = rowsAsObjects_(SHEETS.stages).map((row) => ({
     id: row.id,
@@ -209,6 +213,7 @@ function getPublicState_(editToken) {
       matchId: row.match_id,
       predHome: Number(row.pred_home),
       predAway: Number(row.pred_away),
+      predictedWinner: normalizeMatchSide_(row.predicted_winner),
       updatedAt: row.updated_at
     }));
   const submittedByStage = {};
@@ -260,6 +265,7 @@ function readMatches_() {
     away: row.away,
     actualHome: toNullableNumber_(row.actual_home),
     actualAway: toNullableNumber_(row.actual_away),
+    actualWinner: normalizeMatchSide_(row.actual_winner, row),
     status: row.status || "scheduled",
     displayOrder: Number(row.display_order)
   }));
@@ -290,6 +296,7 @@ function registerParticipant_(displayName) {
 }
 
 function savePredictions_(editToken, stageId, predictions) {
+  ensureRuntimeColumns_();
   const token = String(editToken || "").trim();
   const participant = rowsAsObjects_(SHEETS.participants).find((row) => row.edit_token === token);
   if (!participant) {
@@ -319,6 +326,9 @@ function savePredictions_(editToken, stageId, predictions) {
     if (!canEditMatch_(match, stageMatches)) {
       throw appError_("deadline_passed", "Prediction is already public and locked");
     }
+    if (!isValidPredictionWinner_(match, prediction)) {
+      throw appError_("unknown", "Advancing team is required for drawn knockout predictions");
+    }
   });
 
   const predictionSheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.predictions);
@@ -334,11 +344,12 @@ function savePredictions_(editToken, stageId, predictions) {
       match_id: prediction.matchId,
       pred_home: Number(prediction.predHome),
       pred_away: Number(prediction.predAway),
+      predicted_winner: normalizedPredictionWinner_(stageMatchMap[prediction.matchId], prediction),
       updated_at: now
     }))
   );
 
-  rewriteSheet_(predictionSheet, ["participant_id", "match_id", "pred_home", "pred_away", "updated_at"], nextRows);
+  rewriteSheet_(predictionSheet, ["participant_id", "match_id", "pred_home", "pred_away", "predicted_winner", "updated_at"], nextRows);
 }
 
 function refreshLiveScores_(matches, now) {
@@ -626,6 +637,27 @@ function ensureSheet_(spreadsheet, name, headers) {
   }
 }
 
+function ensureRuntimeColumns_() {
+  ensureSheetColumns_(SHEETS.matches, ["actual_winner"]);
+  ensureSheetColumns_(SHEETS.predictions, ["predicted_winner"]);
+}
+
+function ensureSheetColumns_(sheetName, headersToAdd) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  if (!sheet || sheet.getLastRow() === 0) {
+    return;
+  }
+
+  const lastColumn = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map((header) => String(header).trim());
+  const missingHeaders = headersToAdd.filter((header) => headers.indexOf(header) === -1);
+  if (!missingHeaders.length) {
+    return;
+  }
+
+  sheet.getRange(1, lastColumn + 1, 1, missingHeaders.length).setValues([missingHeaders]);
+}
+
 function getSettings_() {
   const settings = {};
   rowsAsObjects_(SHEETS.settings).forEach((row) => {
@@ -646,6 +678,49 @@ function toNullableNumber_(value) {
     return null;
   }
   return Number(value);
+}
+
+function normalizeMatchSide_(value, match) {
+  const cleanValue = normalizeTeam_(value);
+  if (!cleanValue) {
+    return null;
+  }
+  if (cleanValue === "home" || cleanValue === "h" || (match && cleanValue === normalizeTeam_(match.home))) {
+    return "home";
+  }
+  if (cleanValue === "away" || cleanValue === "a" || (match && cleanValue === normalizeTeam_(match.away))) {
+    return "away";
+  }
+  return null;
+}
+
+function isKnockoutMatch_(match) {
+  return String(stageOf_(match) || "").indexOf("group-") !== 0;
+}
+
+function isValidPredictionWinner_(match, prediction) {
+  if (!isKnockoutMatch_(match)) {
+    return true;
+  }
+  if (Number(prediction.predHome) !== Number(prediction.predAway)) {
+    return true;
+  }
+  return normalizeMatchSide_(prediction.predictedWinner) !== null;
+}
+
+function normalizedPredictionWinner_(match, prediction) {
+  if (!isKnockoutMatch_(match)) {
+    return "";
+  }
+  const predHome = Number(prediction.predHome);
+  const predAway = Number(prediction.predAway);
+  if (predHome > predAway) {
+    return "home";
+  }
+  if (predAway > predHome) {
+    return "away";
+  }
+  return normalizeMatchSide_(prediction.predictedWinner) || "";
 }
 
 function predictionRevealAt_(match, stageMatches) {

@@ -1,4 +1,5 @@
 import { Link2, Save } from "lucide-react";
+import type { Dispatch, SetStateAction } from "react";
 import { FormEvent, useMemo, useState } from "react";
 import { apiClient, messageForApiError } from "../api/client";
 import { StageTabs } from "../components/StageTabs";
@@ -7,9 +8,10 @@ import {
   getMatchesForStage,
   getOpenStage,
   getPredictionMap,
+  isKnockoutMatch,
   sortStages
 } from "../domain/selectors";
-import type { Match, Prediction, PublicState, SavePredictionInput, StageId } from "../domain/types";
+import type { Match, MatchSide, Prediction, PublicState, SavePredictionInput, StageId } from "../domain/types";
 import { canEditMatch, predictionRevealAt } from "../domain/visibility";
 import { appUrl } from "../routing";
 
@@ -27,7 +29,7 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
   const [displayName, setDisplayName] = useState("");
   const [token, setToken] = useState(editToken ?? "");
   const [savedEditLink, setSavedEditLink] = useState<string | null>(null);
-  const [scores, setScores] = useState<Record<string, { home: string; away: string }>>({});
+  const [scores, setScores] = useState<Record<string, PredictionDraft>>({});
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setSaving] = useState(false);
@@ -46,7 +48,7 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
 
     const predictions = collectPredictions(matches, scores, predictionMap, viewerParticipantId);
     if (!predictions) {
-      setError("Заполните обе цифры счета или оставьте матч пустым.");
+      setError("Заполните обе цифры счета или оставьте матч пустым. Для ничьей в плей-офф выберите, кто проходит.");
       return;
     }
     if (!predictions.length) {
@@ -137,6 +139,9 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
             const matchEditable = canEditMatch(match, now, matches);
             const homeValue = getScoreValue(scores, prediction, match.id, "home");
             const awayValue = getScoreValue(scores, prediction, match.id, "away");
+            const predictedWinner = getPredictedWinnerValue(scores, prediction, match.id);
+            const showsAdvancePicker =
+              isKnockoutMatch(match) && homeValue !== "" && awayValue !== "" && homeValue === awayValue;
             return (
               <article className={matchEditable ? "match-form-row" : "match-form-row locked"} key={match.id}>
                 <div>
@@ -165,7 +170,8 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
                         ...current,
                         [match.id]: {
                           home: event.target.value,
-                          away: getScoreValue(current, prediction, match.id, "away")
+                          away: getScoreValue(current, prediction, match.id, "away"),
+                          predictedWinner: current[match.id]?.predictedWinner
                         }
                       }))
                     }
@@ -183,12 +189,34 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
                         ...current,
                         [match.id]: {
                           home: getScoreValue(current, prediction, match.id, "home"),
-                          away: event.target.value
+                          away: event.target.value,
+                          predictedWinner: current[match.id]?.predictedWinner
                         }
                       }))
                     }
                   />
                 </div>
+                {showsAdvancePicker && (
+                  <div className="advance-picker" role="group" aria-label={`Кто проходит: ${match.home} или ${match.away}`}>
+                    <span>Проходит</span>
+                    <button
+                      className={predictedWinner === "home" ? "advance-option active" : "advance-option"}
+                      type="button"
+                      disabled={!matchEditable}
+                      onClick={() => setPredictedWinner(setScores, match.id, homeValue, awayValue, "home")}
+                    >
+                      {match.home}
+                    </button>
+                    <button
+                      className={predictedWinner === "away" ? "advance-option active" : "advance-option"}
+                      type="button"
+                      disabled={!matchEditable}
+                      onClick={() => setPredictedWinner(setScores, match.id, homeValue, awayValue, "away")}
+                    >
+                      {match.away}
+                    </button>
+                  </div>
+                )}
               </article>
             );
           })}
@@ -208,9 +236,15 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
   );
 }
 
+type PredictionDraft = {
+  home: string;
+  away: string;
+  predictedWinner?: MatchSide | "";
+};
+
 function collectPredictions(
   matches: Match[],
-  scores: Record<string, { home: string; away: string }>,
+  scores: Record<string, PredictionDraft>,
   predictionMap: Map<string, Prediction>,
   viewerParticipantId?: string
 ): SavePredictionInput[] | null {
@@ -229,10 +263,15 @@ function collectPredictions(
     if (home === "" || away === "") {
       return null;
     }
+    const predictedWinner = getPredictedWinnerValue(scores, prediction, match.id);
+    if (isKnockoutMatch(match) && home === away && !predictedWinner) {
+      return null;
+    }
     predictions.push({
       matchId: match.id,
       predHome: Number(home),
-      predAway: Number(away)
+      predAway: Number(away),
+      predictedWinner: knockoutPredictionWinner(match, Number(home), Number(away), predictedWinner)
     });
   }
   return predictions;
@@ -250,7 +289,7 @@ function getViewerPrediction(
 }
 
 function getScoreValue(
-  scores: Record<string, { home: string; away: string }>,
+  scores: Record<string, PredictionDraft>,
   prediction: Prediction | undefined,
   matchId: string,
   side: "home" | "away"
@@ -261,4 +300,51 @@ function getScoreValue(
   }
   const predicted = side === "home" ? prediction?.predHome : prediction?.predAway;
   return typeof predicted === "number" ? String(predicted) : "";
+}
+
+function getPredictedWinnerValue(
+  scores: Record<string, PredictionDraft>,
+  prediction: Prediction | undefined,
+  matchId: string
+): MatchSide | "" {
+  const current = scores[matchId]?.predictedWinner;
+  if (typeof current !== "undefined") {
+    return current;
+  }
+  return prediction?.predictedWinner ?? "";
+}
+
+function setPredictedWinner(
+  setScores: Dispatch<SetStateAction<Record<string, PredictionDraft>>>,
+  matchId: string,
+  home: string,
+  away: string,
+  predictedWinner: MatchSide
+) {
+  setScores((current) => ({
+    ...current,
+    [matchId]: {
+      home,
+      away,
+      predictedWinner
+    }
+  }));
+}
+
+function knockoutPredictionWinner(
+  match: Match,
+  home: number,
+  away: number,
+  predictedWinner: MatchSide | ""
+): MatchSide | null {
+  if (!isKnockoutMatch(match)) {
+    return null;
+  }
+  if (home > away) {
+    return "home";
+  }
+  if (away > home) {
+    return "away";
+  }
+  return predictedWinner || null;
 }
