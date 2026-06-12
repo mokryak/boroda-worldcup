@@ -1,8 +1,9 @@
-import { defineConfig, type UserConfig } from "vite";
+import { defineConfig, loadEnv, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 declare const process: {
   env: Record<string, string | undefined>;
+  cwd: () => string;
 };
 
 type VitestConfig = UserConfig & {
@@ -13,17 +14,21 @@ type VitestConfig = UserConfig & {
   };
 };
 
-const config = {
-  base: viteBasePath(process.env.VITE_PUBLIC_BASE_PATH),
-  plugins: [react()],
-  test: {
-    environment: "jsdom",
-    globals: true,
-    setupFiles: "./src/test/setup.ts"
-  }
-} satisfies VitestConfig;
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
 
-export default defineConfig(config as UserConfig);
+  const config = {
+    base: viteBasePath(env.VITE_PUBLIC_BASE_PATH),
+    plugins: [react()],
+    test: {
+      environment: "jsdom",
+      globals: true,
+      setupFiles: "./src/test/setup.ts"
+    }
+  } satisfies VitestConfig;
+
+  return config as UserConfig;
+});
 
 function viteBasePath(value?: string): string {
   if (!value) {
@@ -32,3 +37,4 @@ function viteBasePath(value?: string): string {
 
   return `/${value.replace(/^\/+|\/+$/g, "")}/`;
 }
+
