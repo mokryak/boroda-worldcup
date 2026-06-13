@@ -1,5 +1,6 @@
 import { BookOpen, Medal, Trophy, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useReviews } from "../api/useReviews";
 import { LatestReviewBanner } from "../components/LatestReviewBanner";
 import { StageTabs } from "../components/StageTabs";
@@ -39,6 +40,7 @@ export function ResultsPage({ state }: { state: PublicState }) {
     setActiveStageId(stageId);
     setSelectedMatchId(null);
   };
+  useBodyScrollLock(Boolean(selectedMatch || rulesOpen));
 
   return (
     <div className="stack">
@@ -175,21 +177,23 @@ export function ResultsPage({ state }: { state: PublicState }) {
         </div>
       </section>
 
-      {selectedMatch && (
-        <MatchPredictionsDialog
-          match={selectedMatch}
-          matches={matches}
-          participants={state.participants}
-          predictionMap={predictionMap}
-          predictions={state.predictions}
-          state={state}
-          liveScore={liveScoreMap.get(selectedMatch.id)}
-          liveScoreMap={liveScoreMap}
-          onClose={() => setSelectedMatchId(null)}
-        />
-      )}
+      {selectedMatch &&
+        createPortal(
+          <MatchPredictionsDialog
+            match={selectedMatch}
+            matches={matches}
+            participants={state.participants}
+            predictionMap={predictionMap}
+            predictions={state.predictions}
+            state={state}
+            liveScore={liveScoreMap.get(selectedMatch.id)}
+            liveScoreMap={liveScoreMap}
+            onClose={() => setSelectedMatchId(null)}
+          />,
+          document.body
+        )}
 
-      {rulesOpen && <RulesDialog onClose={() => setRulesOpen(false)} />}
+      {rulesOpen && createPortal(<RulesDialog onClose={() => setRulesOpen(false)} />, document.body)}
 
       <section className="panel scoring-help">
         <Medal aria-hidden />
@@ -236,7 +240,7 @@ function MatchPredictionsDialog({
         }
       }}
     >
-      <section className="match-dialog" role="dialog" aria-modal="true" aria-labelledby="match-dialog-title">
+      <section className="match-dialog match-details-dialog" role="dialog" aria-modal="true" aria-labelledby="match-dialog-title">
         <div className="match-dialog-header">
           <div>
             <h2 id="match-dialog-title">
@@ -257,73 +261,103 @@ function MatchPredictionsDialog({
           </span>
         </div>
 
-        {!visible && (
-          <p className="dialog-note">
-            Прогнозы пока скрыты. Сейчас видно только, кто уже отправил прогноз на этот матч.
-          </p>
-        )}
+        <div className="match-dialog-body">
+          {!visible && (
+            <p className="dialog-note">
+              Прогнозы пока скрыты. Сейчас видно только, кто уже отправил прогноз на этот матч.
+            </p>
+          )}
 
-        <div className="dialog-predictions">
-          <div className="dialog-prediction-head" aria-hidden>
-            <span>Участник</span>
-            <span>{visible ? "Прогноз" : "Статус"}</span>
-            {visible && <span>Матч</span>}
-            {visible && <span>Всего</span>}
-            {visible && <span>Место</span>}
-          </div>
-          {participants.map((participant) => {
-            const prediction = predictionMap.get(`${participant.id}:${match.id}`);
-            const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
-            const points = getMatchScoreForParticipant(match, participant, predictions, liveScore);
-            const standing = standings.get(participant.id);
+          <div className="dialog-predictions">
+            <div className="dialog-prediction-head" aria-hidden>
+              <span>Участник</span>
+              <span>{visible ? "Прогноз" : "Статус"}</span>
+              {visible && <span>Матч</span>}
+              {visible && <span>Всего</span>}
+              {visible && <span>Место</span>}
+            </div>
+            {participants.map((participant) => {
+              const prediction = predictionMap.get(`${participant.id}:${match.id}`);
+              const submitted = getParticipantMatchSubmission(state, match.id, participant.id);
+              const points = getMatchScoreForParticipant(match, participant, predictions, liveScore);
+              const standing = standings.get(participant.id);
 
-            return (
-              <div className="dialog-prediction-row" key={participant.id}>
-                <span>{participant.displayName}</span>
-                {visible ? (
-                  prediction ? (
-                    <>
-                      <strong>
-                        {prediction.predHome}:{prediction.predAway}
-                        {prediction.predictedWinner && matchScoreDraw(prediction)
-                          ? `, проходит ${teamBySide(match, prediction.predictedWinner)}`
-                          : ""}
-                      </strong>
-                      {score && standing ? (
-                        <>
-                          <strong className={`points-badge dialog-points ${pointsClass(points)}`}>{points}</strong>
-                          <strong>{standing.total}</strong>
-                          <strong className={`mini-rank ${rankClass(standing.rank)}`}>#{standing.rank}</strong>
-                        </>
-                      ) : (
-                        <>
-                          <em>—</em>
-                          <em>—</em>
-                          <em>—</em>
-                        </>
-                      )}
-                    </>
+              return (
+                <div className="dialog-prediction-row" key={participant.id}>
+                  <span>{participant.displayName}</span>
+                  {visible ? (
+                    prediction ? (
+                      <>
+                        <strong>
+                          {prediction.predHome}:{prediction.predAway}
+                          {prediction.predictedWinner && matchScoreDraw(prediction)
+                            ? `, проходит ${teamBySide(match, prediction.predictedWinner)}`
+                            : ""}
+                        </strong>
+                        {score && standing ? (
+                          <>
+                            <strong className={`points-badge dialog-points ${pointsClass(points)}`}>{points}</strong>
+                            <strong>{standing.total}</strong>
+                            <strong className={`mini-rank ${rankClass(standing.rank)}`}>#{standing.rank}</strong>
+                          </>
+                        ) : (
+                          <>
+                            <em>—</em>
+                            <em>—</em>
+                            <em>—</em>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <em>—</em>
+                        <em>—</em>
+                        <em>—</em>
+                        <em>—</em>
+                      </>
+                    )
                   ) : (
-                    <>
-                      <em>—</em>
-                      <em>—</em>
-                      <em>—</em>
-                      <em>—</em>
-                    </>
-                  )
-                ) : (
-                  <em className={submitted ? "submitted-mark yes" : "submitted-mark"}>
-                    {submitted ? "сдал" : "нет"}
-                  </em>
-                )}
-              </div>
-            );
-          })}
-          {!participants.length && <p>Пока нет участников.</p>}
+                    <em className={submitted ? "submitted-mark yes" : "submitted-mark"}>
+                      {submitted ? "сдал" : "нет"}
+                    </em>
+                  )}
+                </div>
+              );
+            })}
+            {!participants.length && <p>Пока нет участников.</p>}
+          </div>
         </div>
       </section>
     </div>
   );
+}
+
+function useBodyScrollLock(locked: boolean) {
+  useEffect(() => {
+    if (!locked) {
+      return;
+    }
+
+    const scrollY = window.scrollY;
+    const { body } = document;
+    const previousPosition = body.style.position;
+    const previousTop = body.style.top;
+    const previousWidth = body.style.width;
+    const previousOverflow = body.style.overflow;
+
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+
+    return () => {
+      body.style.position = previousPosition;
+      body.style.top = previousTop;
+      body.style.width = previousWidth;
+      body.style.overflow = previousOverflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [locked]);
 }
 
 function pointsClass(points: number) {

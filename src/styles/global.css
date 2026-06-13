@@ -773,8 +773,10 @@ input:disabled {
   display: flex;
   inset: 0;
   justify-content: center;
+  overflow: hidden;
   padding: 18px;
   position: fixed;
+  overscroll-behavior: contain;
   z-index: 80;
 }
 
@@ -788,6 +790,12 @@ input:disabled {
   overflow: auto;
   padding: 0 20px 18px;
   width: min(100%, 560px);
+}
+
+.match-details-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .match-dialog-header {
@@ -838,6 +846,14 @@ input:disabled {
 .match-dialog-meta strong {
   color: var(--ink);
   font-size: 1.05rem;
+}
+
+.match-dialog-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-bottom: max(4px, env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling: touch;
 }
 
 .dialog-note {
@@ -1007,17 +1023,26 @@ input:disabled {
   }
 
   .match-dialog-backdrop {
-    align-items: center;
-    padding: 8px;
+    align-items: stretch;
+    padding: 0;
   }
 
   .match-dialog {
-    max-height: calc(100dvh - 16px);
+    border-radius: 0;
+    box-shadow: none;
+    max-height: none;
     padding: 0 12px 12px;
+    width: 100%;
+  }
+
+  .match-details-dialog {
+    height: 100dvh;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
   }
 
   .match-dialog-header {
-    padding: 12px 0 9px;
+    flex: 0 0 auto;
+    padding: max(12px, env(safe-area-inset-top)) 0 9px;
   }
 
   .match-dialog-header h2 {
@@ -1031,13 +1056,23 @@ input:disabled {
   }
 
   .match-dialog-meta {
+    flex: 0 0 auto;
     margin: 9px 0 8px;
+  }
+
+  .match-dialog-body {
+    padding-bottom: calc(84px + env(safe-area-inset-bottom));
   }
 
   .dialog-prediction-head,
   .dialog-prediction-row {
     gap: 5px;
-    grid-template-columns: minmax(0, 1fr) 48px 30px 34px 38px;
+    grid-template-columns: minmax(0, 1fr) 54px 34px 38px 42px;
+  }
+
+  .dialog-prediction-head {
+    font-size: 0.62rem;
+    padding: 0 8px 2px;
   }
 
   .dialog-prediction-row {
@@ -1047,6 +1082,15 @@ input:disabled {
 
   .dialog-prediction-row > span {
     line-height: 1.15;
+  }
+
+  .dialog-prediction-row strong {
+    white-space: normal;
+  }
+
+  .dialog-prediction-row strong:not(.points-badge):not(.mini-rank),
+  .dialog-prediction-row em {
+    text-align: right;
   }
 
   .content {
