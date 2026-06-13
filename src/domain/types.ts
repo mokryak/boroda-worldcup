@@ -67,6 +67,15 @@ export type LiveScore = {
   provider?: string;
 };
 
+export type Review = {
+  id: string;
+  title: string;
+  preview: string;
+  body: string;
+  publishedAt: string;
+  author?: string;
+};
+
 export type PublicState = {
   tournamentName: string;
   generatedAt: string;

@@ -1,4 +1,4 @@
-import { Link2, Save } from "lucide-react";
+import { Save } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import { FormEvent, useMemo, useState } from "react";
 import { apiClient, messageForApiError } from "../api/client";
@@ -13,22 +13,18 @@ import {
 } from "../domain/selectors";
 import type { Match, MatchSide, Prediction, PublicState, SavePredictionInput, StageId } from "../domain/types";
 import { canEditMatch, predictionRevealAt } from "../domain/visibility";
-import { appUrl } from "../routing";
 
 type PredictPageProps = {
   state: PublicState;
   onSaved(): Promise<void>;
-  mode: "new" | "edit";
   editToken?: string;
 };
 
-export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProps) {
+export function PredictPage({ state, onSaved, editToken }: PredictPageProps) {
   const stages = sortStages(state.stages);
   const firstOpenStage = getOpenStage(state);
   const [activeStageId, setActiveStageId] = useState<StageId>(firstOpenStage?.id ?? stages[0].id);
-  const [displayName, setDisplayName] = useState("");
   const [token, setToken] = useState(editToken ?? "");
-  const [savedEditLink, setSavedEditLink] = useState<string | null>(null);
   const [scores, setScores] = useState<Record<string, PredictionDraft>>({});
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +33,7 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
   const matches = getMatchesForStage(state, activeStageId);
   const predictionMap = useMemo(() => getPredictionMap(state.predictions), [state.predictions]);
   const viewerParticipantId = state.viewerParticipantId;
+  const viewer = state.participants.find((participant) => participant.id === viewerParticipantId);
   const now = new Date();
   const hasEditableMatches = matches.some((match) => canEditMatch(match, now, matches));
   const timeZoneLabel = formatLocalTimeZoneLabel();
@@ -58,15 +55,7 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
 
     setSaving(true);
     try {
-      let workingToken = token;
-      if (mode === "new" && !workingToken) {
-        const registered = await apiClient.register(displayName);
-        workingToken = registered.editToken;
-        setToken(workingToken);
-        setSavedEditLink(appUrl(`/edit/${workingToken}`));
-      }
-
-      await apiClient.savePredictions(workingToken, activeStageId, predictions);
+      await apiClient.savePredictions(token, activeStageId, predictions);
       await onSaved();
       setStatus("Прогноз сохранен.");
     } catch (caught) {
@@ -82,39 +71,21 @@ export function PredictPage({ state, onSaved, mode, editToken }: PredictPageProp
         <div className="section-heading">
           <div>
             <p className="eyebrow">Форма прогноза</p>
-            <h2>{mode === "edit" ? "Редактирование по секретной ссылке" : "Новый участник"}</h2>
+            <h2>Редактирование по секретной ссылке</h2>
             <p>Можно заполнить любые открытые матчи. Пустые строки не сохраняются.</p>
           </div>
         </div>
 
-        {mode === "new" && !token && (
-          <label className="field">
-            <span>Имя в таблице</span>
-            <input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              placeholder="Например, Саша"
-              required
-            />
-          </label>
-        )}
-
-        {mode === "edit" && (
-          <label className="field">
-            <span>Секретный токен</span>
-            <input value={token} onChange={(event) => setToken(event.target.value)} required />
-          </label>
-        )}
-
-        {savedEditLink && (
+        {viewer && (
           <div className="notice success">
-            <Link2 aria-hidden />
-            <div>
-              <strong>Секретная ссылка</strong>
-              <p>{savedEditLink}</p>
-            </div>
+            <strong>Мы вас узнали: {viewer.displayName}</strong>
           </div>
         )}
+
+        <label className="field">
+          <span>Секретный токен</span>
+          <input value={token} onChange={(event) => setToken(event.target.value)} required />
+        </label>
       </section>
 
       <section className="panel">

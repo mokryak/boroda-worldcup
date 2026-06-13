@@ -51,8 +51,11 @@ function routeNameForHref(href: string) {
   if (href === "/predict") {
     return "predict";
   }
-  if (href === "/results") {
+  if (href === "/" || href === "/results") {
     return "results";
+  }
+  if (href === "/reviews") {
+    return "reviews";
   }
   return "home";
 }

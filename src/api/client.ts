@@ -6,6 +6,7 @@ import type {
   MatchSide,
   PublicState,
   RegisterResponse,
+  Review,
   SavePredictionInput,
   StageId
 } from "../domain/types";
@@ -15,6 +16,7 @@ export type ApiClient = {
   getState(editToken?: string): Promise<PublicState>;
   register(displayName: string): Promise<RegisterResponse>;
   savePredictions(editToken: string, stageId: StageId, predictions: SavePredictionInput[]): Promise<void>;
+  getReviews(): Promise<Review[]>;
 };
 
 const appsScriptUrl = import.meta.env.VITE_APPS_SCRIPT_URL?.trim();
@@ -44,6 +46,11 @@ function createAppsScriptClient(url: string): ApiClient {
         body: JSON.stringify({ action: "savePredictions", editToken, stageId, predictions })
       });
       await readJson(response);
+    },
+    async getReviews() {
+      const params = new URLSearchParams({ action: "reviews" });
+      const response = await fetch(`${url}?${params.toString()}`);
+      return readJson(response);
     }
   };
 }
@@ -61,6 +68,17 @@ async function readJson<T>(response: Response): Promise<T> {
 type MockDb = PublicState & {
   tokens: Record<string, string>;
 };
+
+const MOCK_REVIEWS: Review[] = [
+  {
+    id: "review-1",
+    title: "📝 Обзор 1-го дня ЧМ-2026 и турнира «Борода»",
+    preview: "Мексика разнесла ЮАР с тремя красными карточками, Корея вырвала победу у Чехии — и Лакифиш набрал идеальные 10 из 10!",
+    body: "## 🏟️ Что произошло на полях ЧМ-2026?\n\n**Мексика 2:0 ЮАР** — три красные карточки в матче открытия! Голы: Киньонес (9') и Хименес (67'). Первый такой случай в истории открывающих матчей ЧМ.\n\n**Южная Корея 2:1 Чехия** — Кореи вырвали победу на 80-й минуте! Кречи (59'), Хван Ин Бом (67'), О Хён Гю (80').\n\n## 🏆 Наш турнир\n\n🥇 **Лакифиш** — 10 очков из 10! Угадал оба точных счёта.\n🥈 **Катя** — 7 очков.\n🥉 **Андрей** и **Синий петух** — по 5 очков.",
+    publishedAt: new Date().toISOString(),
+    author: "Агент Борода"
+  }
+];
 
 function createMockClient(): ApiClient {
   const db = loadMockDb();
@@ -147,6 +165,9 @@ function createMockClient(): ApiClient {
         db.submittedStages.push({ stageId, participantIds: [participantId] });
       }
       persistMockDb(db);
+    },
+    async getReviews() {
+      return MOCK_REVIEWS;
     }
   };
 }

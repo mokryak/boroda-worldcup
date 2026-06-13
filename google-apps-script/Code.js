@@ -3,7 +3,8 @@ const SHEETS = {
   stages: "Stages",
   matches: "Matches",
   participants: "Participants",
-  predictions: "Predictions"
+  predictions: "Predictions",
+  reviews: "Reviews"
 };
 
 const PREDICTION_LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -14,6 +15,7 @@ const GROUP_STAGE_FINALIZE_AFTER_MS = 130 * 60 * 1000;
 const KNOCKOUT_STAGE_FINALIZE_AFTER_MS = 210 * 60 * 1000;
 const LIVE_SCORE_CACHE_SECONDS = 5 * 60;
 const LIVE_SCORE_CACHE_VERSION = "v2";
+const ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const THESPORTSDB_EVENT_SEARCH_URL = "https://www.thesportsdb.com/api/v1/json/3/searchevents.php";
 
 const TEAM_ALIASES = {
@@ -26,6 +28,9 @@ const TEAM_ALIASES = {
   "côte divoire": "ivory coast",
   "czech republic": "czechia",
   "czechia": "czechia",
+  "congo dr": "dr congo",
+  "democratic republic of congo": "dr congo",
+  "dr congo": "dr congo",
   "ivory coast": "ivory coast",
   "korea republic": "south korea",
   "south korea": "south korea",
@@ -37,11 +42,19 @@ const TEAM_ALIASES = {
   "united states of america": "united states"
 };
 
+const THESPORTSDB_SEARCH_TEAM_NAMES = {
+  "czechia": ["Czech Republic", "Czechia"],
+  "united states": ["USA", "United States", "United States of America"]
+};
+
 function doGet(event) {
   try {
     const action = event.parameter.action || "state";
     if (action === "state") {
       return jsonOk(getPublicState_(event.parameter.editToken));
+    }
+    if (action === "reviews") {
+      return jsonOk(getReviews_());
     }
     if (action === "liveDebug") {
       return jsonOk(getLiveScoreDebug_());
@@ -64,6 +77,9 @@ function doPost(event) {
     if (payload.action === "savePredictions") {
       savePredictions_(payload.editToken, payload.stageId, payload.predictions || []);
       return jsonOk({ saved: true });
+    }
+    if (payload.action === "addReview") {
+      return jsonOk(addReview_(payload.adminToken, payload.title, payload.preview, payload.body, payload.author));
     }
     return jsonError_("not_found", "Unknown action", 404);
   } catch (error) {
@@ -103,6 +119,14 @@ function setupWorldCupPredictor() {
     "pred_away",
     "predicted_winner",
     "updated_at"
+  ]);
+  ensureSheet_(spreadsheet, SHEETS.reviews, [
+    "review_id",
+    "title",
+    "preview",
+    "body",
+    "published_at",
+    "author"
   ]);
   ensureRuntimeColumns_();
 }
@@ -149,25 +173,28 @@ function getLiveScoreDebug_() {
       actualHome: match.actualHome,
       actualAway: match.actualAway
     })),
+    providerFixtures: [],
     theSportsDb: []
   };
 
-  const sportsDbFixtures = fetchTheSportsDbFixtures_(uniqueMatchesById_(candidates.concat(finalCandidates)));
-  debug.theSportsDb = sportsDbFixtures.map((fixture) => {
+  const providerFixtures = fetchProviderFixtures_(uniqueMatchesById_(candidates.concat(finalCandidates)));
+  debug.providerFixtures = providerFixtures.map((fixture) => {
     const localMatch = candidates.concat(finalCandidates).find((candidate) =>
-      findTheSportsDbFixture_(candidate, [fixture])
+      findProviderFixture_(candidate, [fixture])
     );
-    const score = extractTheSportsDbScore_(fixture);
-    const providerStatus = theSportsDbStatus_(fixture);
+    const score = extractProviderScore_(fixture);
+    const providerStatus = providerStatus_(fixture);
     return {
-      apiHome: fixture.strHomeTeam,
-      apiAway: fixture.strAwayTeam,
+      provider: providerName_(fixture),
+      apiHome: fixtureHomeTeam_(fixture),
+      apiAway: fixtureAwayTeam_(fixture),
       score,
       status: providerStatus,
       effectiveStatus: localMatch && score ? effectiveFixtureStatus_(localMatch, providerStatus, score, now) : null,
       matchedMatchId: localMatch ? localMatch.id : null
     };
   });
+  debug.theSportsDb = debug.providerFixtures.filter((fixture) => fixture.provider === "thesportsdb");
 
   return debug;
 }
@@ -360,21 +387,26 @@ function refreshLiveScores_(matches, now) {
     return { items: [], finalizedMatchIds: [] };
   }
 
-  const sportsDbFixtures = fetchTheSportsDbFixtures_(uniqueMatchesById_(candidates.concat(finalCandidates)));
+  const providerFixtures = fetchProviderFixtures_(uniqueMatchesById_(candidates.concat(finalCandidates)));
   const liveItems = [];
   const finalized = [];
   candidates.forEach((match) => {
-    const sportsDbFixture = findTheSportsDbFixture_(match, sportsDbFixtures);
-    if (!sportsDbFixture) {
+    const providerFixture = findProviderFixture_(match, providerFixtures);
+    if (!providerFixture) {
       return;
     }
 
-    const score = extractTheSportsDbScore_(sportsDbFixture);
+    const score = extractProviderScore_(providerFixture);
     if (!score) {
       return;
     }
 
-    const status = effectiveFixtureStatus_(match, theSportsDbStatus_(sportsDbFixture), score, currentTime);
+    const providerStatus = providerStatus_(providerFixture);
+    if (providerStatus.status === "scheduled") {
+      return;
+    }
+
+    const status = effectiveFixtureStatus_(match, providerStatus, score, currentTime);
     liveItems.push({
       matchId: match.id,
       home: score.home,
@@ -382,7 +414,7 @@ function refreshLiveScores_(matches, now) {
       status: status.status,
       minute: status.minute,
       updatedAt: currentTime.toISOString(),
-      provider: "thesportsdb"
+      provider: providerName_(providerFixture)
     });
 
     if (status.status === "complete") {
@@ -391,12 +423,15 @@ function refreshLiveScores_(matches, now) {
   });
 
   finalCandidates.forEach((match) => {
-    const sportsDbFixture = findTheSportsDbFixture_(match, sportsDbFixtures);
-    if (!sportsDbFixture) {
+    const providerFixture = findProviderFixture_(match, providerFixtures);
+    if (!providerFixture) {
       return;
     }
-    const score = extractTheSportsDbScore_(sportsDbFixture);
-    const status = score ? effectiveFixtureStatus_(match, theSportsDbStatus_(sportsDbFixture), score, currentTime) : null;
+    const score = extractProviderScore_(providerFixture);
+    const providerStatus = providerStatus_(providerFixture);
+    const status = score && providerStatus.status !== "scheduled"
+      ? effectiveFixtureStatus_(match, providerStatus, score, currentTime)
+      : null;
     if (!score || status.status !== "complete") {
       return;
     }
@@ -445,6 +480,50 @@ function getLiveScoreCandidates_(matches, now) {
   });
 }
 
+function fetchProviderFixtures_(matches) {
+  return fetchEspnFixtures_(matches).concat(fetchTheSportsDbFixtures_(matches));
+}
+
+function fetchEspnFixtures_(matches) {
+  return uniqueEspnScoreboardDates_(matches)
+    .map((date) =>
+      readCachedProviderFixtures_(`${LIVE_SCORE_CACHE_VERSION}_espn_${date}`, LIVE_SCORE_CACHE_SECONDS, () =>
+        fetchEspnScoreboard_(date)
+      )
+    )
+    .reduce((allEvents, events) => allEvents.concat(events || []), []);
+}
+
+function uniqueEspnScoreboardDates_(matches) {
+  const dates = {};
+  matches.forEach((match) => {
+    const kickoff = new Date(kickoffOf_(match));
+    if (isFinite(kickoff.getTime())) {
+      [-1, 0, 1].forEach((dayOffset) => {
+        const date = new Date(kickoff.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+        dates[Utilities.formatDate(date, "UTC", "yyyyMMdd")] = true;
+      });
+    }
+  });
+  return Object.keys(dates);
+}
+
+function fetchEspnScoreboard_(date) {
+  const response = UrlFetchApp.fetch(ESPN_SCOREBOARD_URL + "?dates=" + encodeURIComponent(date), {
+    muteHttpExceptions: true,
+    headers: {
+      Accept: "application/json"
+    }
+  });
+  const statusCode = response.getResponseCode();
+  if (statusCode < 200 || statusCode >= 300) {
+    return [];
+  }
+
+  const payload = JSON.parse(response.getContentText());
+  return Array.isArray(payload.events) ? payload.events : [];
+}
+
 function fetchTheSportsDbFixtures_(matches) {
   return matches
     .map((match) =>
@@ -456,21 +535,166 @@ function fetchTheSportsDbFixtures_(matches) {
 }
 
 function fetchTheSportsDbEvent_(match) {
-  const query = `${match.home}_vs_${match.away}`.replace(/\s+/g, "_");
-  const response = UrlFetchApp.fetch(THESPORTSDB_EVENT_SEARCH_URL + "?e=" + encodeURIComponent(query), {
-    muteHttpExceptions: true,
-    headers: {
-      Accept: "application/json"
+  const queries = theSportsDbEventQueries_(match);
+  for (let index = 0; index < queries.length; index += 1) {
+    const response = UrlFetchApp.fetch(THESPORTSDB_EVENT_SEARCH_URL + "?e=" + encodeURIComponent(queries[index]), {
+      muteHttpExceptions: true,
+      headers: {
+        Accept: "application/json"
+      }
+    });
+    const statusCode = response.getResponseCode();
+    if (statusCode < 200 || statusCode >= 300) {
+      continue;
     }
+
+    const payload = JSON.parse(response.getContentText());
+    const events = Array.isArray(payload.event) ? payload.event : [];
+    const fixture = events.find((event) => isTheSportsDbFixtureMatch_(match, event));
+    if (fixture) {
+      return fixture;
+    }
+  }
+  return null;
+}
+
+function theSportsDbEventQueries_(match) {
+  const homeNames = theSportsDbTeamSearchNames_(match.home);
+  const awayNames = theSportsDbTeamSearchNames_(match.away);
+  const queries = {};
+
+  homeNames.forEach((home) => {
+    awayNames.forEach((away) => {
+      queries[`${home}_vs_${away}`.replace(/\s+/g, "_")] = true;
+    });
   });
-  const statusCode = response.getResponseCode();
-  if (statusCode < 200 || statusCode >= 300) {
+
+  return Object.keys(queries);
+}
+
+function theSportsDbTeamSearchNames_(teamName) {
+  const names = {};
+  const canonical = canonicalTeam_(teamName);
+  (THESPORTSDB_SEARCH_TEAM_NAMES[canonical] || []).forEach((name) => {
+    names[name] = true;
+  });
+  names[String(teamName || "").trim()] = true;
+  return Object.keys(names).filter(Boolean);
+}
+
+function findProviderFixture_(match, fixtures) {
+  return fixtures.find((fixture) => fixture && isProviderFixtureMatch_(match, fixture));
+}
+
+function isProviderFixtureMatch_(match, fixture) {
+  if (isEspnFixture_(fixture)) {
+    return isEspnFixtureMatch_(match, fixture);
+  }
+  return isTheSportsDbFixtureMatch_(match, fixture);
+}
+
+function extractProviderScore_(fixture) {
+  if (isEspnFixture_(fixture)) {
+    return extractEspnScore_(fixture);
+  }
+  return extractTheSportsDbScore_(fixture);
+}
+
+function providerStatus_(fixture) {
+  if (isEspnFixture_(fixture)) {
+    return espnStatus_(fixture);
+  }
+  return theSportsDbStatus_(fixture);
+}
+
+function providerName_(fixture) {
+  return isEspnFixture_(fixture) ? "espn" : "thesportsdb";
+}
+
+function fixtureHomeTeam_(fixture) {
+  if (isEspnFixture_(fixture)) {
+    const competitor = espnCompetitor_(fixture, "home");
+    return competitor && competitor.team ? competitor.team.displayName : "";
+  }
+  return fixture.strHomeTeam;
+}
+
+function fixtureAwayTeam_(fixture) {
+  if (isEspnFixture_(fixture)) {
+    const competitor = espnCompetitor_(fixture, "away");
+    return competitor && competitor.team ? competitor.team.displayName : "";
+  }
+  return fixture.strAwayTeam;
+}
+
+function isEspnFixture_(fixture) {
+  return fixture && Array.isArray(fixture.competitions);
+}
+
+function isEspnFixtureMatch_(match, fixture) {
+  const home = canonicalTeam_(fixtureHomeTeam_(fixture));
+  const away = canonicalTeam_(fixtureAwayTeam_(fixture));
+  const expectedHome = canonicalTeam_(match.home);
+  const expectedAway = canonicalTeam_(match.away);
+  const kickoffDate = new Date(match.kickoffUtc).toISOString().slice(0, 10);
+  const fixtureDate = String(fixture.date || "").slice(0, 10);
+  return home === expectedHome && away === expectedAway && (!fixtureDate || fixtureDate === kickoffDate);
+}
+
+function extractEspnScore_(fixture) {
+  const status = espnStatus_(fixture);
+  if (status.status === "scheduled") {
     return null;
   }
 
-  const payload = JSON.parse(response.getContentText());
-  const events = Array.isArray(payload.event) ? payload.event : [];
-  return events.find((event) => isTheSportsDbFixtureMatch_(match, event)) || null;
+  const home = espnCompetitor_(fixture, "home");
+  const away = espnCompetitor_(fixture, "away");
+  if (!home || !away) {
+    return null;
+  }
+
+  const homeScore = toNullableNumber_(home.score);
+  const awayScore = toNullableNumber_(away.score);
+  if (homeScore === null || awayScore === null || Number.isNaN(homeScore) || Number.isNaN(awayScore)) {
+    return null;
+  }
+  return { home: homeScore, away: awayScore };
+}
+
+function espnStatus_(fixture) {
+  const competition = firstEspnCompetition_(fixture);
+  const status = (competition && competition.status) || fixture.status || {};
+  const type = status.type || {};
+  if (type.completed || String(type.state || "").toLowerCase() === "post") {
+    return { status: "complete", minute: null };
+  }
+  if (String(type.state || "").toLowerCase() === "in") {
+    return { status: "live", minute: espnMinute_(status) };
+  }
+  return { status: "scheduled", minute: null };
+}
+
+function espnMinute_(status) {
+  const displayClock = String(status.displayClock || (status.type && status.type.shortDetail) || "");
+  const minuteMatch = displayClock.match(/\d+/);
+  if (minuteMatch) {
+    return Number(minuteMatch[0]);
+  }
+  const clock = Number(status.clock);
+  if (isFinite(clock) && clock > 0) {
+    return Math.ceil(clock / 60);
+  }
+  return null;
+}
+
+function firstEspnCompetition_(fixture) {
+  return fixture.competitions && fixture.competitions.length ? fixture.competitions[0] : null;
+}
+
+function espnCompetitor_(fixture, homeAway) {
+  const competition = firstEspnCompetition_(fixture);
+  const competitors = competition && Array.isArray(competition.competitors) ? competition.competitors : [];
+  return competitors.find((competitor) => competitor.homeAway === homeAway) || null;
 }
 
 function findTheSportsDbFixture_(match, fixtures) {
@@ -585,6 +809,92 @@ function writeFinalScores_(scores) {
   }
 }
 
+function getReviews_() {
+  ensureReviewsSheet_();
+  const rows = rowsAsObjects_(SHEETS.reviews);
+  const reviews = rows
+    .map(function(row) {
+      return {
+        id: String(row.review_id || ""),
+        title: String(row.title || ""),
+        preview: String(row.preview || ""),
+        body: String(row.body || ""),
+        publishedAt: String(row.published_at || ""),
+        author: row.author ? String(row.author) : undefined
+      };
+    })
+    .filter(function(r) { return r.id && r.title; })
+    .sort(function(a, b) {
+      return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+    });
+  return dedupeReviews_(reviews);
+}
+
+function dedupeReviews_(reviews) {
+  const seen = {};
+  return reviews.filter(function(review) {
+    const key = normalizeReviewContent_(review.title) + "\n" + normalizeReviewContent_(review.body);
+    if (seen[key]) {
+      return false;
+    }
+    seen[key] = true;
+    return true;
+  });
+}
+
+function normalizeReviewContent_(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function addReview_(adminToken, title, preview, body, author) {
+  const token = String(adminToken || "").trim();
+  const expectedToken = getAdminToken_();
+
+  if (!expectedToken) {
+    throw appError_("unknown", "adminToken is not configured in Script Properties");
+  }
+  if (token !== expectedToken) {
+    throw appError_("invalid_token", "Invalid admin token");
+  }
+
+  const cleanTitle = String(title || "").trim();
+  const cleanPreview = String(preview || "").trim();
+  const cleanBody = String(body || "").trim();
+
+  if (!cleanTitle || !cleanBody) {
+    throw appError_("unknown", "title and body are required");
+  }
+
+  const sheet = ensureReviewsSheet_();
+
+  const reviewId = Utilities.getUuid();
+  const now = new Date().toISOString();
+
+  sheet.appendRow([reviewId, cleanTitle, cleanPreview, cleanBody, now, String(author || "").trim()]);
+
+  return { saved: true, reviewId, publishedAt: now };
+}
+
+function getAdminToken_() {
+  const scriptToken = PropertiesService.getScriptProperties().getProperty("adminToken");
+  if (scriptToken) {
+    return String(scriptToken).trim();
+  }
+  const settings = getSettings_();
+  return String(settings.adminToken || "").trim();
+}
+
+function ensureReviewsSheet_() {
+  return ensureSheet_(SpreadsheetApp.getActive(), SHEETS.reviews, [
+    "review_id",
+    "title",
+    "preview",
+    "body",
+    "published_at",
+    "author"
+  ]);
+}
+
 function canonicalTeam_(name) {
   const normalized = normalizeTeam_(name);
   return TEAM_ALIASES[normalized] || normalized;
@@ -635,6 +945,7 @@ function ensureSheet_(spreadsheet, name, headers) {
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
+  return sheet;
 }
 
 function ensureRuntimeColumns_() {

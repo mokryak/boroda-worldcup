@@ -1,5 +1,7 @@
 import { BookOpen, Medal, Trophy, X } from "lucide-react";
 import { useState } from "react";
+import { useReviews } from "../api/useReviews";
+import { LatestReviewBanner } from "../components/LatestReviewBanner";
 import { StageTabs } from "../components/StageTabs";
 import { StatusPill } from "../components/StatusPill";
 import { formatDateTime, formatLocalTimeZoneLabel } from "../components/format";
@@ -23,6 +25,8 @@ export function ResultsPage({ state }: { state: PublicState }) {
   const [activeStageId, setActiveStageId] = useState<StageId>(stages[0].id);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const { reviews } = useReviews();
+  const latestReview = reviews[0] ?? null;
   const activeStage = stages.find((stage) => stage.id === activeStageId)!;
   const matches = getMatchesForStage(state, activeStageId);
   const selectedMatch = selectedMatchId ? matches.find((match) => match.id === selectedMatchId) : undefined;
@@ -38,6 +42,8 @@ export function ResultsPage({ state }: { state: PublicState }) {
 
   return (
     <div className="stack">
+      {latestReview && <LatestReviewBanner review={latestReview} />}
+
       <section className="panel">
         <div className="section-heading">
           <div>
