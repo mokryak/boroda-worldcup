@@ -192,6 +192,12 @@ function renderBlock(token: MarkdownToken, key: string): ReactNode {
     }
     case "paragraph":
       return <p key={key}>{renderInlineTokens(data.tokens, String(data.text ?? ""))}</p>;
+    case "text":
+      return (
+        <Fragment key={key}>
+          {renderInlineTokens(data.tokens, String(data.text ?? ""))}
+        </Fragment>
+      );
     case "list": {
       const items = Array.isArray(data.items) ? data.items : [];
       const children = items.map((item, index) => {
