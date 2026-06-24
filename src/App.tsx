@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTournamentState } from "./api/useTournamentState";
 import { Layout } from "./components/Layout";
 import { LoadingState } from "./components/LoadingState";
-import { getRememberedEditIdentity, rememberEditIdentity } from "./editMemory";
+import { clearRememberedEditIdentity, getRememberedEditIdentity, rememberEditIdentity } from "./editMemory";
 import { PredictPage } from "./pages/PredictPage";
 import { PredictInfoPage } from "./pages/PredictInfoPage";
 import { ResultsPage } from "./pages/ResultsPage";
@@ -22,7 +22,19 @@ export function App() {
   const [rememberedEditIdentity, setRememberedEditIdentity] = useState(() => getRememberedEditIdentity());
 
   useEffect(() => {
-    if (route.name === "edit" && tournament.state && !tournament.error) {
+    if (route.name === "edit") {
+      clearRememberedEditIdentity();
+      setRememberedEditIdentity(null);
+    }
+  }, [route]);
+
+  useEffect(() => {
+    if (
+      route.name === "edit" &&
+      tournament.loadedEditToken === route.token &&
+      tournament.state &&
+      !tournament.error
+    ) {
       const viewer = tournament.state.participants.find(
         (participant) => participant.id === tournament.state?.viewerParticipantId
       );
@@ -33,7 +45,7 @@ export function App() {
       rememberEditIdentity(identity);
       setRememberedEditIdentity(identity);
     }
-  }, [route, tournament.error, tournament.state]);
+  }, [route, tournament.error, tournament.loadedEditToken, tournament.state]);
 
   if (tournament.isLoading) {
     return (

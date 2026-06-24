@@ -8,6 +8,7 @@ type RefreshOptions = {
 
 export function useTournamentState(editToken?: string) {
   const [state, setState] = useState<PublicState | null>(null);
+  const [loadedEditToken, setLoadedEditToken] = useState<string | undefined>(undefined);
   const [isLoading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -17,7 +18,9 @@ export function useTournamentState(editToken?: string) {
     }
     setError(null);
     try {
-      setState(await apiClient.getState(editToken));
+      const nextState = await apiClient.getState(editToken);
+      setState(nextState);
+      setLoadedEditToken(editToken);
     } catch {
       setError("Не удалось загрузить турнир.");
     } finally {
@@ -29,5 +32,5 @@ export function useTournamentState(editToken?: string) {
     void refresh();
   }, [refresh]);
 
-  return { state, isLoading, error, refresh };
+  return { state, loadedEditToken, isLoading, error, refresh };
 }

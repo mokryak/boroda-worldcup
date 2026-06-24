@@ -15,6 +15,15 @@ export function rememberEditIdentity(identity: RememberedEditIdentity) {
   }
 }
 
+export function clearRememberedEditIdentity() {
+  try {
+    window.localStorage.removeItem(EDIT_TOKEN_STORAGE_KEY);
+    window.localStorage.removeItem(EDIT_IDENTITY_STORAGE_KEY);
+  } catch {
+    // Private browsing or blocked storage should not break the prediction form.
+  }
+}
+
 export function getRememberedEditIdentity(): RememberedEditIdentity | null {
   try {
     const rawIdentity = window.localStorage.getItem(EDIT_IDENTITY_STORAGE_KEY);
