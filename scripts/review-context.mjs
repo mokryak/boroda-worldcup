@@ -14,6 +14,26 @@ const lookbackHours = Number(args["lookback-hours"] ?? 36);
 const upcomingHours = Number(args["upcoming-hours"] ?? 24);
 const outPath = resolve(args.out ?? "tmp/daily-review-context.md");
 const reviewArchiveDir = resolve(args["reviews-dir"] ?? "content/reviews/published");
+const participantContext = [
+  { name: "Саша", note: "организатор турнира." },
+  { name: "Андрей", note: "это Андрей Пичугин." },
+  { name: "Синий петух из 1998", note: "это Владимир; иногда уместно имя Вован." },
+  { name: "Костя и Даня", note: "это Костя и его сын Даня." },
+  { name: "Тони Двукратный", note: "это Антон Пантюхин, двукратный победитель прошлых аналогичных турниров." },
+  { name: "Катя", note: "это жена Антона Пантюхина." },
+  { name: "Лакифиш", note: "это Глеб; он снялся с турнира и не должен быть обязательным героем новых обзоров." },
+  { name: "ЛФК Дмитрий", note: "это Дмитрий Фещенко; допустимы формы Фещ и иногда Фещао." },
+  { name: "Истомин", note: "это Андрей Истомин." },
+  { name: "Атрисс", note: "это Анна Истомина, девичья фамилия Трисс." },
+  { name: "Яра", note: "это Ярослав, сын Андрея и Анны Истоминых." },
+  { name: "Анастасия", note: "это Настя, дочь Андрея и Анны Истоминых." }
+];
+const participantContextRules = [
+  "Учитывай, что Катя и Антон - супруги.",
+  "Учитывай, что Андрей Истомин и Анна Истомина - супруги, а Яра и Анастасия - их дети.",
+  "Эти связи можно использовать в тексте как живые связки, но без перебора.",
+  "Лакифиш снялся с турнира: не делай его обязательной персональной строкой и не строй вокруг него сюжет, даже если он еще есть в данных."
+];
 
 const [state, reviews] = await Promise.all([
   fetchAction(webAppUrl, "state"),
@@ -149,6 +169,15 @@ function renderMarkdown(context) {
         }).join("\n")
       : state.participants.map((participant) => `- **${participant.displayName}**: no completed matches in this run.`).join("\n"),
     "",
+    "## Participant Context",
+    "",
+    "Use this section explicitly when writing the review. Prefer these names, roles, and family links over guesswork.",
+    "",
+    ...participantContext.map((item) => `- **${item.name}**: ${item.note}`),
+    "",
+    "Practical rules:",
+    ...participantContextRules.map((rule) => `- ${rule}`),
+    "",
     "## Upcoming Watchlist",
     "",
     upcomingMatches.length
@@ -171,11 +200,12 @@ function renderMarkdown(context) {
     "- Browse current football sources for every match in `Matches To Review`.",
     "- Combine real match story with the prediction tournament story.",
     "- Mention every participant at least once.",
+    "- Use `Participant Context` explicitly for names, roles, family links, and the special handling of Lakifish.",
     "- Continue the story and authorial style from `Previous Reviews For Story And Style` when available.",
     "- Preview only matches listed in `Upcoming Watchlist`; do not mention hidden-prediction matches.",
     "- Produce `title`, `preview`, and `body`.",
     "- Save body as a local project draft under `content/reviews/drafts/`.",
-    "- Do not publish until the user approves the draft.",
+    "- If this run is an approval-based drafting session, stop after the draft. If this run is a publish automation, publish immediately after internal checks.",
     ""
   ].join("\n");
 }

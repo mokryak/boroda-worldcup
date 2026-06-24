@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getLeaderboard,
+  getLatestMatchdayLeaderboardSummary,
   getMatchScoreForParticipant,
   getOpenStage,
   getStandingsAfterMatch
@@ -110,6 +111,119 @@ describe("getLeaderboard", () => {
 
     expect(standings.get("p1")).toEqual({ matchPoints: 5, total: 5, rank: 1 });
     expect(standings.get("p2")).toEqual({ matchPoints: 4, total: 4, rank: 2 });
+  });
+
+  it("summarizes points and rank movement for the latest matchday", () => {
+    const matchdayState: PublicState = {
+      ...state,
+      matches: [
+        state.matches[0],
+        {
+          ...state.matches[0],
+          id: "m002",
+          kickoffUtc: "2026-06-12T19:00:00.000Z",
+          actualHome: 0,
+          actualAway: 0,
+          displayOrder: 2
+        }
+      ],
+      participants: [
+        ...state.participants,
+        { id: "p3", displayName: "C", createdAt: "2026-06-10T00:00:00.000Z" }
+      ],
+      predictions: [
+        ...state.predictions,
+        {
+          participantId: "p3",
+          matchId: "m001",
+          predHome: 0,
+          predAway: 1,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        },
+        {
+          participantId: "p1",
+          matchId: "m002",
+          predHome: 1,
+          predAway: 0,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        },
+        {
+          participantId: "p2",
+          matchId: "m002",
+          predHome: 0,
+          predAway: 1,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        },
+        {
+          participantId: "p3",
+          matchId: "m002",
+          predHome: 0,
+          predAway: 0,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        }
+      ],
+      submittedStages: [{ stageId: "group-md1", participantIds: ["p1", "p2", "p3"] }],
+      submittedMatches: [
+        { matchId: "m001", participantIds: ["p1", "p2", "p3"] },
+        { matchId: "m002", participantIds: ["p1", "p2", "p3"] }
+      ]
+    };
+
+    const summary = getLatestMatchdayLeaderboardSummary(matchdayState, new Map(), new Date("2026-06-12T19:00:00.000Z"));
+
+    expect(summary?.deltas.get("p1")).toEqual({ points: 0, rankChange: 0 });
+    expect(summary?.deltas.get("p2")).toEqual({ points: 0, rankChange: -1 });
+    expect(summary?.deltas.get("p3")).toEqual({ points: 5, rankChange: 1 });
+  });
+
+  it("groups the latest matchday by schedule gaps across midnight", () => {
+    const midnightMatchdayState: PublicState = {
+      ...state,
+      matches: [
+        {
+          ...state.matches[0],
+          kickoffUtc: "2026-06-16T22:00:00.000Z"
+        },
+        {
+          ...state.matches[0],
+          id: "m002",
+          kickoffUtc: "2026-06-17T04:00:00.000Z",
+          actualHome: 0,
+          actualAway: 0,
+          displayOrder: 2
+        }
+      ],
+      predictions: [
+        ...state.predictions,
+        {
+          participantId: "p1",
+          matchId: "m002",
+          predHome: 0,
+          predAway: 0,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        },
+        {
+          participantId: "p2",
+          matchId: "m002",
+          predHome: 1,
+          predAway: 1,
+          updatedAt: "2026-06-10T00:00:00.000Z"
+        }
+      ],
+      submittedMatches: [
+        { matchId: "m001", participantIds: ["p1", "p2"] },
+        { matchId: "m002", participantIds: ["p1", "p2"] }
+      ]
+    };
+
+    const summary = getLatestMatchdayLeaderboardSummary(
+      midnightMatchdayState,
+      new Map(),
+      new Date("2026-06-17T04:00:00.000Z")
+    );
+
+    expect(summary?.deltas.get("p1")?.points).toBe(10);
+    expect(summary?.deltas.get("p2")?.points).toBe(8);
   });
 
   it("includes advancement points for knockout matches", () => {

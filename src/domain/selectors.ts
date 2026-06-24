@@ -2,6 +2,9 @@ import { scorePrediction } from "./scoring";
 import type { LiveScore, Match, Participant, Prediction, PublicState, Stage, StageId } from "./types";
 import { canEditMatch, isPredictionVisible, stageHasEditableMatches } from "./visibility";
 
+const MATCHDAY_BREAK_HOURS = 10;
+const MATCHDAY_BREAK_MS = MATCHDAY_BREAK_HOURS * 60 * 60 * 1000;
+
 export function sortStages(stages: Stage[]): Stage[] {
   return [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
 }
@@ -82,6 +85,66 @@ export function getLeaderboard(state: PublicState, now = new Date()) {
       return { participant, total };
     })
     .sort((a, b) => b.total - a.total || a.participant.displayName.localeCompare(b.participant.displayName));
+}
+
+export type MatchdayLeaderboardDelta = {
+  points: number;
+  rankChange: number;
+};
+
+export type MatchdayLeaderboardSummary = {
+  deltas: Map<string, MatchdayLeaderboardDelta>;
+};
+
+export function getLatestMatchdayLeaderboardSummary(
+  state: PublicState,
+  liveScoreMap = getLiveScoreMap(state.liveScores),
+  now = new Date()
+): MatchdayLeaderboardSummary | null {
+  const predictionMap = getPredictionMap(state.predictions);
+  const sortedMatches = sortMatchesChronologically(state.matches);
+  const scoredMatches = sortedMatches.filter((match) => {
+    if (!isPredictionVisible(match, now, state.matches)) {
+      return false;
+    }
+    return Boolean(matchScore(match, liveScoreMap.get(match.id)));
+  });
+
+  const latestScoredMatch = scoredMatches[scoredMatches.length - 1];
+  if (!latestScoredMatch) {
+    return null;
+  }
+
+  const matchdayMatchIds = getScheduleMatchdayMatchIds(sortedMatches, latestScoredMatch);
+  const matchdayMatches = scoredMatches.filter((match) => matchdayMatchIds.has(match.id));
+  const previousMatches = scoredMatches.filter((match) => !matchdayMatchIds.has(match.id));
+  const totalsBefore = scoreMatchesForParticipants(state, previousMatches, predictionMap, liveScoreMap);
+  const matchdayPoints = scoreMatchesForParticipants(state, matchdayMatches, predictionMap, liveScoreMap);
+  const totalsAfter = new Map<string, number>();
+
+  state.participants.forEach((participant) => {
+    totalsAfter.set(
+      participant.id,
+      (totalsBefore.get(participant.id) ?? 0) + (matchdayPoints.get(participant.id) ?? 0)
+    );
+  });
+
+  const ranksBefore = previousMatches.length ? rankParticipants(state, totalsBefore) : new Map<string, number>();
+  const ranksAfter = rankParticipants(state, totalsAfter);
+  const deltas = new Map<string, MatchdayLeaderboardDelta>();
+
+  state.participants.forEach((participant) => {
+    const rankBefore = ranksBefore.get(participant.id);
+    const rankAfter = ranksAfter.get(participant.id);
+    deltas.set(participant.id, {
+      points: matchdayPoints.get(participant.id) ?? 0,
+      rankChange: rankBefore && rankAfter ? rankBefore - rankAfter : 0
+    });
+  });
+
+  return {
+    deltas
+  };
 }
 
 export function getStandingsAfterMatch(
@@ -205,4 +268,70 @@ function sortMatchesChronologically(matches: Match[]): Match[] {
     }
     return a.displayOrder - b.displayOrder;
   });
+}
+
+function scoreMatchesForParticipants(
+  state: PublicState,
+  matches: Match[],
+  predictionMap: Map<string, Prediction>,
+  liveScoreMap: Map<string, LiveScore>
+): Map<string, number> {
+  const totals = new Map<string, number>();
+
+  state.participants.forEach((participant) => {
+    const total = matches.reduce((sum, match) => {
+      const prediction = predictionMap.get(`${participant.id}:${match.id}`);
+      return (
+        sum +
+        scorePrediction(
+          matchScore(match, liveScoreMap.get(match.id)),
+          predictionScore(prediction),
+          { includeAdvanceBonus: isKnockoutMatch(match) }
+        )
+      );
+    }, 0);
+    totals.set(participant.id, total);
+  });
+
+  return totals;
+}
+
+function rankParticipants(state: PublicState, totals: Map<string, number>): Map<string, number> {
+  return new Map(
+    [...state.participants]
+      .sort((left, right) => {
+        const byTotal = (totals.get(right.id) ?? 0) - (totals.get(left.id) ?? 0);
+        if (byTotal !== 0) {
+          return byTotal;
+        }
+        return left.displayName.localeCompare(right.displayName);
+      })
+      .map((participant, index) => [participant.id, index + 1])
+  );
+}
+
+function getScheduleMatchdayMatchIds(matches: Match[], targetMatch: Match): Set<string> {
+  const targetIndex = matches.findIndex((match) => match.id === targetMatch.id);
+  if (targetIndex < 0) {
+    return new Set([targetMatch.id]);
+  }
+
+  let firstIndex = targetIndex;
+  while (firstIndex > 0 && matchGapMs(matches[firstIndex - 1], matches[firstIndex]) <= MATCHDAY_BREAK_MS) {
+    firstIndex -= 1;
+  }
+
+  let lastIndex = targetIndex;
+  while (
+    lastIndex < matches.length - 1 &&
+    matchGapMs(matches[lastIndex], matches[lastIndex + 1]) <= MATCHDAY_BREAK_MS
+  ) {
+    lastIndex += 1;
+  }
+
+  return new Set(matches.slice(firstIndex, lastIndex + 1).map((match) => match.id));
+}
+
+function matchGapMs(previousMatch: Match, nextMatch: Match): number {
+  return new Date(nextMatch.kickoffUtc).getTime() - new Date(previousMatch.kickoffUtc).getTime();
 }

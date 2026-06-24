@@ -1,4 +1,4 @@
-import { BookOpen, Medal, Trophy, X } from "lucide-react";
+import { ArrowDown, ArrowUp, BookOpen, Medal, Minus, Trophy, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useReviews } from "../api/useReviews";
@@ -8,6 +8,7 @@ import { StatusPill } from "../components/StatusPill";
 import { formatDateTime, formatLocalTimeZoneLabel } from "../components/format";
 import {
   getLeaderboard,
+  getLatestMatchdayLeaderboardSummary,
   getLiveScoreMap,
   getMatchScoreForParticipant,
   getMatchesForStage,
@@ -34,6 +35,7 @@ export function ResultsPage({ state }: { state: PublicState }) {
   const leaderboard = getLeaderboard(state);
   const predictionMap = getPredictionMap(state.predictions);
   const liveScoreMap = getLiveScoreMap(state.liveScores);
+  const matchdaySummary = getLatestMatchdayLeaderboardSummary(state, liveScoreMap);
   const open = stageHasEditableMatches(activeStage, state.matches);
   const visibleCount = matches.filter((match) => isPredictionVisible(match, new Date(), matches)).length;
   const handleStageChange = (stageId: StageId) => {
@@ -64,7 +66,15 @@ export function ResultsPage({ state }: { state: PublicState }) {
           {leaderboard.map((row, index) => (
             <article className={`leaderboard-row ${rankClass(index + 1)}`} key={row.participant.id}>
               <span className={`rank ${rankClass(index + 1)}`}>{index + 1}</span>
-              <span>{row.participant.displayName}</span>
+              <span className="leaderboard-name">
+                <span>{row.participant.displayName}</span>
+              </span>
+              {matchdaySummary && (
+                <span className="leaderboard-day" title="Очки и движение за последний игровой день">
+                  <span>+{matchdaySummary.deltas.get(row.participant.id)?.points ?? 0}</span>
+                  <RankMovementBadge value={matchdaySummary.deltas.get(row.participant.id)?.rankChange ?? 0} />
+                </span>
+              )}
               <strong>{row.total}</strong>
             </article>
           ))}
@@ -83,6 +93,10 @@ export function ResultsPage({ state }: { state: PublicState }) {
         <p className="timezone-note">
           Время матчей локальное ({formatLocalTimeZoneLabel()}). В начале тура прогнозы открываются со стартом первого матча, дальше - за 24 часа до матча.
         </p>
+        <div className="scoring-help">
+          <Medal aria-hidden />
+          <p>5 за точный счет, 4 за разницу, 3 за исход. В плей-офф еще +3 за угаданного прошедшего.</p>
+        </div>
 
         <div className="matrix-scroll" role="region" aria-label="Матрица прогнозов">
           <table className="results-matrix">
@@ -194,12 +208,33 @@ export function ResultsPage({ state }: { state: PublicState }) {
         )}
 
       {rulesOpen && createPortal(<RulesDialog onClose={() => setRulesOpen(false)} />, document.body)}
-
-      <section className="panel scoring-help">
-        <Medal aria-hidden />
-        <p>5 за точный счет, 4 за разницу, 3 за исход. В плей-офф еще +3 за угаданного прошедшего.</p>
-      </section>
     </div>
+  );
+}
+
+function RankMovementBadge({ value }: { value: number }) {
+  if (value > 0) {
+    return (
+      <span className="rank-movement up" title={`Поднялся на ${value} ${placeWord(value)}`}>
+        <ArrowUp size={14} aria-hidden />
+        {value}
+      </span>
+    );
+  }
+
+  if (value < 0) {
+    return (
+      <span className="rank-movement down" title={`Опустился на ${Math.abs(value)} ${placeWord(Math.abs(value))}`}>
+        <ArrowDown size={14} aria-hidden />
+        {Math.abs(value)}
+      </span>
+    );
+  }
+
+  return (
+    <span className="rank-movement same" title="Место не изменилось">
+      <Minus size={14} aria-hidden />
+    </span>
   );
 }
 
@@ -393,6 +428,21 @@ function rankClass(rank: number) {
     return "rank-3";
   }
   return "";
+}
+
+function placeWord(value: number): string {
+  const lastTwo = value % 100;
+  const last = value % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) {
+    return "мест";
+  }
+  if (last === 1) {
+    return "место";
+  }
+  if (last >= 2 && last <= 4) {
+    return "места";
+  }
+  return "мест";
 }
 
 function RulesDialog({ onClose }: { onClose: () => void }) {
